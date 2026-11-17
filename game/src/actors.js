@@ -2,20 +2,20 @@
 //
 // Two tricks keep a whole city affordable. A car is one merged buffer with its paint baked into
 // vertex colours (vehicles.js), so the fleet costs two draw calls a car rather than a dozen. The
-// people are thirteen InstancedMeshes - one per body part - with a per-instance colour, so a
-// hundred and twenty walking bodies cost thirteen draw calls in total and not a thousand.
+// people are one InstancedMesh per body part with a per-instance colour, so a hundred and twenty
+// walking bodies cost a dozen draw calls in total and not a thousand.
 //
-// Nothing here allocates in the frame loop. The pools are built once, `pose` writes into them, and
-// a body that is not wanted this frame is collapsed by scaling its instances to nothing.
+// Nothing here allocates in the frame loop. The pools are built once, pose writes into them, and a
+// body that is not wanted this frame is collapsed by scaling its instances to nothing.
 
 import * as THREE from '../vendor/three/three.module.min.js';
-import { PALETTE } from './tuning.js';
-import { makeCarMesh, dressCruiser } from './vehicles.js';
-import { glowTexture } from './paint.js';
+import { PALETTE } from './settings.js';
+import { carMesh, dressAsCruiser } from './vehicles.js';
+import { glowTexture } from './textures.js';
 
 // ---------------------------------------------------------------- body parts
 
-const geo = {
+const parts = {
   torso: new THREE.BoxGeometry(0.46, 0.6, 0.26),
   hips: new THREE.BoxGeometry(0.4, 0.2, 0.24),
   head: new THREE.SphereGeometry(0.135, 9, 7),
@@ -29,15 +29,15 @@ const geo = {
   pistol: new THREE.BoxGeometry(0.07, 0.1, 0.26),
 };
 // Move each limb so the shoulder or hip sits at the pivot.
-geo.arm.translate(0, -0.25, 0);
-geo.leg.translate(0, -0.33, 0);
-geo.shoe.translate(0, 0.33, 0);
+parts.arm.translate(0, -0.25, 0);
+parts.leg.translate(0, -0.33, 0);
+parts.shoe.translate(0, 0.33, 0);
 
 /**
- * The body, part by part: where it hangs on the frame, what colour it takes, and which swing
- * joint moves it. `policeOnly` parts are hidden on civilians and vice versa.
+ * The body, part by part: where it hangs on the frame, what it is coloured with, and which swing
+ * joint moves it. `needsHat`/`needsBag`/`policeOnly` decide visibility for a given wearer.
  */
-const BODY_PARTS = [
+const BODY = [
   { key: 'torso', at: [0, 1.12, 0], tone: 'shirt' },
   { key: 'hips', at: [0, 0.78, 0], tone: 'trousers' },
   { key: 'head', at: [0, 1.54, 0], tone: 'skin' },
@@ -48,7 +48,7 @@ const BODY_PARTS = [
   { key: 'legR', geo: 'leg', at: [0.12, 0.78, 0], tone: 'trousers', swing: 'legR' },
   { key: 'shoeL', geo: 'shoe', at: [-0.12, 0.45, 0.04], tone: 'shoe', swing: 'legL' },
   { key: 'shoeR', geo: 'shoe', at: [0.12, 0.45, 0.04], tone: 'shoe', swing: 'legR' },
-  { key: 'hatBrim', at: [0, 1.63, 0], tone: 'hat', civilianOnly: false, needsHat: true },
+  { key: 'hatBrim', at: [0, 1.63, 0], tone: 'hat', needsHat: true },
   { key: 'hatTop', at: [0, 1.7, 0], tone: 'hat', needsHat: true },
   { key: 'bag', at: [0.3, 1.05, -0.02], tone: 'bag', needsBag: true },
   { key: 'pistol', at: [0.34, 1.12, 0.3], tone: 'gun', policeOnly: true },
@@ -87,14 +87,13 @@ function toneFor(tone, look, police) {
   }
 }
 
-/**
- * A pool of bodies drawn as instanced parts. `set(i, look, police)` dresses and poses one;
- * `show(n)` reveals the first n and collapses the rest.
- */
-export function makeBodyPool(scene, capacity) {
-  const parts = [];
-  for (const def of BODY_PARTS) {
-    const shape = geo[def.geo ?? def.key];
+const ZERO = new THREE.Vector3(0.0001, 0.0001, 0.0001);
+
+/** A pool of bodies drawn as instanced parts. */
+function bodyPool(scene, capacity) {
+  const slots = [];
+  for (const def of BODY) {
+    const shape = parts[def.geo ?? def.key];
     const material = new THREE.MeshLambertMaterial({ color: 0xffffff });
     const mesh = new THREE.InstancedMesh(shape, material, capacity);
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -105,7 +104,7 @@ export function makeBodyPool(scene, capacity) {
     for (let i = 0; i < capacity; i += 1) mesh.setColorAt(i, white);
     mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
     scene.add(mesh);
-    parts.push({ def, mesh, tones: new Array(capacity).fill(null) });
+    slots.push({ def, mesh, tones: new Array(capacity).fill(null) });
   }
 
   const rootQ = new THREE.Quaternion();
@@ -117,12 +116,12 @@ export function makeBodyPool(scene, capacity) {
   const eul = new THREE.Euler();
   const colour = new THREE.Color();
 
-  const pool = {
+  return {
     capacity,
-    parts,
+    slots,
     /**
-     * Pose body `i`. `look` needs {x, z, yaw}; the rest is optional:
-     * phase, moving, run, down (seconds fallen), shirt, trousers, skin, hat, bag, flash.
+     * Pose body `i`. `look` needs {x, z, yaw}; the rest is optional: phase, moving, run, down
+     * (seconds fallen), shirt, trousers, skin, hat, bag, flash.
      */
     set(i, look, police = false) {
       const fallen = (look.down ?? 0) > 0;
@@ -140,9 +139,9 @@ export function makeBodyPool(scene, capacity) {
 
       const swing = fallen ? 0 : Math.sin(look.phase ?? 0) * (look.run ? 0.95 : 0.5) * (look.moving ? 1 : 0.12);
 
-      for (let k = 0; k < parts.length; k += 1) {
-        const part = parts[k];
-        const def = part.def;
+      for (let k = 0; k < slots.length; k += 1) {
+        const slot = slots[k];
+        const def = slot.def;
         let rx = 0;
         let rz = 0;
         let hidden = false;
@@ -154,7 +153,7 @@ export function makeBodyPool(scene, capacity) {
           if (def.swing === 'legL') rx = 0.15;
           if (def.swing === 'legR') rx = -0.1;
         } else if (police && (def.swing === 'armL' || def.swing === 'armR')) {
-          // Both hands up and forward: the pistol is held two-handed at chest height.
+          // Both hands up and forward: the pistol held two-handed at chest height.
           rx = def.swing === 'armR' ? -1.5 + (look.flash ?? 0) * 0.12 : -1.34 + (look.flash ?? 0) * 0.12;
           rz = def.swing === 'armR' ? -0.12 : 0.2;
         } else if (def.swing === 'armL') {
@@ -177,34 +176,27 @@ export function makeBodyPool(scene, capacity) {
         eul.set(rx, 0, rz);
         partQ.setFromEuler(eul);
         pos.set(def.at[0], def.at[1], def.at[2]);
-        const scale = hidden ? ZERO : one;
-        partM.compose(pos, partQ, scale);
+        partM.compose(pos, partQ, hidden ? ZERO : one);
         partM.premultiply(rootM);
-        part.mesh.setMatrixAt(i, partM);
+        slot.mesh.setMatrixAt(i, partM);
 
         const tone = toneFor(def.tone, look, police);
-        if (part.tones[i] !== tone) {
-          part.tones[i] = tone;
-          part.mesh.setColorAt(i, colour.setStyle(tone));
+        if (slot.tones[i] !== tone) {
+          slot.tones[i] = tone;
+          slot.mesh.setColorAt(i, colour.setStyle(tone));
         }
       }
     },
     /** Reveal the first n bodies and collapse the rest. */
     show(n) {
-      for (const part of parts) {
-        part.mesh.count = Math.min(n, capacity);
-        part.mesh.instanceMatrix.needsUpdate = true;
-        if (part.mesh.instanceColor) part.mesh.instanceColor.needsUpdate = true;
+      for (const slot of slots) {
+        slot.mesh.count = Math.min(n, capacity);
+        slot.mesh.instanceMatrix.needsUpdate = true;
+        if (slot.mesh.instanceColor) slot.mesh.instanceColor.needsUpdate = true;
       }
     },
-    hideAll() {
-      this.show(0);
-    },
   };
-  return pool;
 }
-
-const ZERO = new THREE.Vector3(0.0001, 0.0001, 0.0001);
 
 // ---------------------------------------------------------------- the cast
 
@@ -212,12 +204,12 @@ const ZERO = new THREE.Vector3(0.0001, 0.0001, 0.0001);
  * Everything that moves: the fleet (a mesh per car record, built on demand and reused), the two
  * body pools, the bullet streaks, the impact flashes, and the player's own body.
  */
-export function makeCast(scene) {
+export function buildCast(scene) {
   const cast = {
     scene,
     fleet: new Map(),
-    crowd: makeBodyPool(scene, 190),
-    officers: makeBodyPool(scene, 24),
+    crowd: bodyPool(scene, 190),
+    officers: bodyPool(scene, 24),
     streaks: [],
     flashes: [],
     muzzles: [],
@@ -225,10 +217,10 @@ export function makeCast(scene) {
   };
 
   // A bullet streak: a long thin box, fatter than a real round so it still reads at 30 m.
-  const streakGeo = new THREE.BoxGeometry(0.07, 0.07, 1);
+  const streak = new THREE.BoxGeometry(0.07, 0.07, 1);
   for (let i = 0; i < 48; i += 1) {
     const s = new THREE.Mesh(
-      streakGeo,
+      streak,
       new THREE.MeshBasicMaterial({
         color: new THREE.Color('#fff2c0'),
         toneMapped: false,
@@ -283,7 +275,7 @@ export function makeCast(scene) {
 }
 
 /** The player's own body: an ordinary group, because it is the only one with a muzzle flash. */
-export function makeHero(cast) {
+export function buildHero(cast) {
   const group = new THREE.Group();
   const skin = new THREE.MeshLambertMaterial({ color: new THREE.Color(PALETTE.skins[0]) });
   const shirt = new THREE.MeshLambertMaterial({ color: new THREE.Color('#f4efe3') });
@@ -292,35 +284,33 @@ export function makeHero(cast) {
   const dark = new THREE.MeshLambertMaterial({ color: new THREE.Color('#1a1a20') });
   const hairMat = new THREE.MeshLambertMaterial({ color: new THREE.Color('#241a14') });
 
-  const torso = new THREE.Mesh(geo.torso, shirt);
+  const torso = new THREE.Mesh(parts.torso, shirt);
   torso.position.y = 1.12;
-  const hips = new THREE.Mesh(geo.hips, trousers);
+  const hips = new THREE.Mesh(parts.hips, trousers);
   hips.position.y = 0.78;
-  const head = new THREE.Mesh(geo.head, skin);
+  const head = new THREE.Mesh(parts.head, skin);
   head.position.y = 1.54;
-  const hair = new THREE.Mesh(geo.hair, hairMat);
+  const hair = new THREE.Mesh(parts.hair, hairMat);
   hair.position.set(0, 1.56, -0.01);
 
   const joint = (shape, material, x, y, z) => {
     const g = new THREE.Group();
     g.position.set(x, y, z);
-    const m = new THREE.Mesh(shape, material);
-    m.castShadow = true;
-    g.add(m);
+    g.add(new THREE.Mesh(shape, material));
     return g;
   };
-  const armL = joint(geo.arm, skin, -0.31, 1.34, 0);
-  const armR = joint(geo.arm, skin, 0.31, 1.34, 0);
-  const legL = joint(geo.leg, trousers, -0.12, 0.78, 0);
-  const legR = joint(geo.leg, trousers, 0.12, 0.78, 0);
-  const shoeL = new THREE.Mesh(geo.shoe, shoes);
+  const armL = joint(parts.arm, skin, -0.31, 1.34, 0);
+  const armR = joint(parts.arm, skin, 0.31, 1.34, 0);
+  const legL = joint(parts.leg, trousers, -0.12, 0.78, 0);
+  const legR = joint(parts.leg, trousers, 0.12, 0.78, 0);
+  const shoeL = new THREE.Mesh(parts.shoe, shoes);
   shoeL.position.set(0, 0.33, 0.04);
   legL.add(shoeL);
-  const shoeR = new THREE.Mesh(geo.shoe, shoes);
+  const shoeR = new THREE.Mesh(parts.shoe, shoes);
   shoeR.position.set(0, 0.33, 0.04);
   legR.add(shoeR);
 
-  const gun = new THREE.Mesh(geo.pistol, dark);
+  const gun = new THREE.Mesh(parts.pistol, dark);
   gun.position.set(0, -0.24, 0.2);
   gun.rotation.x = -1.35;
   armR.add(gun);
@@ -343,7 +333,7 @@ export function makeHero(cast) {
   });
   group.visible = false;
   cast.scene.add(group);
-  cast.hero = { group, parts: { torso, hips, head, hair, armL, armR, legL, legR, gun, flash } };
+  cast.hero = { group, torso, hips, head, hair, armL, armR, legL, legR, gun, flash };
   return cast.hero;
 }
 
@@ -353,8 +343,8 @@ export function makeHero(cast) {
 function fleetEntry(cast, record, cruiser) {
   let entry = cast.fleet.get(record);
   if (!entry) {
-    entry = makeCarMesh(cruiser ? 'cruiser' : record.kind, record.paint);
-    if (cruiser) entry.police = dressCruiser(entry);
+    entry = carMesh(cruiser ? 'cruiser' : record.kind, record.paint);
+    if (cruiser) entry.police = dressAsCruiser(entry);
     cast.scene.add(entry.group);
     cast.fleet.set(record, entry);
   }
@@ -402,7 +392,7 @@ export function poseCrowd(cast, sim) {
   cast.crowd.show(n);
 }
 
-/** Pose the officers - standing, aiming or down - and the flashes at their barrels. */
+/** Pose the officers — standing, aiming or down — and the flashes at their barrels. */
 export function poseOfficers(cast, sim, camera) {
   let n = 0;
   let m = 0;
@@ -442,22 +432,21 @@ export function poseHero(cast, sim) {
     return;
   }
   h.group.visible = true;
-  const parts = h.parts;
   const swing = Math.sin(p.phase) * (p.running ? 0.95 : 0.5) * (p.moving ? 1 : 0.12);
   h.group.position.set(p.x, 0, p.z);
   h.group.rotation.set(0, -p.yaw + Math.PI / 2, 0);
-  parts.legL.rotation.x = swing;
-  parts.legR.rotation.x = -swing;
+  h.legL.rotation.x = swing;
+  h.legR.rotation.x = -swing;
   const lean = Math.max(-0.9, Math.min(0.9, p.aimYaw - p.yaw));
-  parts.armR.rotation.set(-1.46, 0, -0.16 + lean * 0.3);
-  parts.armL.rotation.set(-1.3, 0, 0.26 + lean * 0.2);
+  h.armR.rotation.set(-1.46, 0, -0.16 + lean * 0.3);
+  h.armL.rotation.set(-1.3, 0, 0.26 + lean * 0.2);
   if (p.muzzle > 0) {
-    parts.flash.visible = true;
-    parts.flash.position.set(Math.cos(p.aimYaw) * 0.62, 1.3, Math.sin(p.aimYaw) * 0.62);
-    parts.flash.scale.setScalar(0.22 + p.muzzle * 0.34);
-    parts.flash.rotation.y = -p.aimYaw + Math.PI / 2;
+    h.flash.visible = true;
+    h.flash.position.set(Math.cos(p.aimYaw) * 0.62, 1.3, Math.sin(p.aimYaw) * 0.62);
+    h.flash.scale.setScalar(0.22 + p.muzzle * 0.34);
+    h.flash.rotation.y = -p.aimYaw + Math.PI / 2;
   } else {
-    parts.flash.visible = false;
+    h.flash.visible = false;
   }
 }
 
@@ -501,4 +490,4 @@ export function poseShots(cast, sim, camera) {
   for (let i = m; i < cast.flashes.length; i += 1) cast.flashes[i].visible = false;
 }
 
-export { geo as BODY_GEO, BODY_PARTS };
+export { parts as BODY_PARTS, BODY };

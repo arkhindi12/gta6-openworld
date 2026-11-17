@@ -1,27 +1,26 @@
 // What a car looks like, and how a cruiser is dressed.
 //
 // A car is built once per (kind, paint) pair and cached: the body is one merged geometry with the
-// paint, glass, trim and tyres baked into vertex colours, so a car costs two draw calls (body and
-// lamps) rather than a dozen. The lamps are separate because a brake light changes colour at
+// paint, glass, trim and tyres baked into vertex colours, so a car costs two draw calls — body and
+// lamps — instead of a dozen. The lamps stay separate because a brake light changes colour at
 // runtime and a merged buffer cannot.
 //
-// The model faces local +z. A car's heading `yaw` is measured from +x, so its group is turned by
-// PI/2 - yaw, which is why every car in the city drives nose-first.
+// The model faces local +z, and a car's heading `yaw` is measured from +x, so its group is turned
+// by PI/2 - yaw. That quarter turn is why every car in the city drives nose-first.
 //
-// Under each car sits a soft contact shadow - a dark radial blob just above the road - because
-// without one a low-poly car reads as a sticker pasted on the asphalt.
+// Under each car sits a soft contact shadow, a dark radial blob just above the road: without one a
+// low-poly car reads as a sticker pasted on the asphalt.
 
 import * as THREE from '../vendor/three/three.module.min.js';
-import { MeshBuilder } from './mesh.js';
-import { glowTexture } from './paint.js';
-import { PALETTE } from './tuning.js';
+import { Batch } from './geometry.js';
+import { glowTexture } from './textures.js';
 
 /**
- * The shapes. `sill` is the height of the lower body, `deck` the bonnet/boot, `cabin` the
- * greenhouse, `roof` the total height, `cabinLen` the cabin's share of the length. `top` is the
- * cruise speed band the traffic gives a car of this kind.
+ * The shapes. `sill` is the lower body's height, `deck` the bonnet and boot, `cabin` the
+ * greenhouse, `roof` the total, `cabinLen` the cabin's share of the length. `top` is the cruise
+ * band the traffic gives a car of this kind.
  */
-export const CAR_KINDS = {
+export const SHAPES = {
   sedan: { len: 4.6, wid: 1.94, sill: 0.5, deck: 0.34, cabin: 0.62, cabinLen: 0.52, roof: 0.86, top: [14, 21] },
   coupe: { len: 4.4, wid: 1.9, sill: 0.44, deck: 0.3, cabin: 0.5, cabinLen: 0.46, roof: 0.78, top: [16, 24] },
   drop: { len: 4.6, wid: 1.92, sill: 0.42, deck: 0.26, cabin: 0.18, cabinLen: 0.38, roof: 0.64, top: [17, 25] },
@@ -31,8 +30,10 @@ export const CAR_KINDS = {
   cruiser: { len: 4.9, wid: 2.02, sill: 0.52, deck: 0.34, cabin: 0.66, cabinLen: 0.5, roof: 0.92, top: [20, 30] },
 };
 
+export const TAXI_PAINT = '#ffcc33';
+export const CRUISER_PAINT = '#f2f3f5';
 
-const bodyCache = new Map();
+const built = new Map();
 const shadowMaterial = new THREE.MeshBasicMaterial({
   map: glowTexture('#000000'),
   transparent: true,
@@ -45,7 +46,7 @@ function rgb(hex) {
   return [c.r, c.g, c.b];
 }
 
-/** A wheel: a low-poly cylinder lying on the x axis, plus a hub disc. */
+/** A wheel: a low-poly cylinder on the x axis, plus a hub disc at each end. */
 function wheel(builder, cx, cy, cz, radius, width, tyre, rim) {
   const sides = 8;
   for (let i = 0; i < sides; i += 1) {
@@ -58,7 +59,6 @@ function wheel(builder, cx, cy, cz, radius, width, tyre, rim) {
     const n = [0, Math.cos((a0 + a1) / 2), Math.sin((a0 + a1) / 2)];
     builder.quad([cx - width / 2, y0, z0], [cx + width / 2, y0, z0], [cx + width / 2, y1, z1], [cx - width / 2, y1, z1], [[0, 0], [1, 0], [1, 1], [0, 1]], n, tyre);
   }
-  // The two faces of the cylinder, slightly proud, in rim silver.
   const r2 = radius * 0.52;
   for (const sx of [-1, 1]) {
     const x = cx + (sx * width) / 2 + sx * 0.01;
@@ -66,21 +66,18 @@ function wheel(builder, cx, cy, cz, radius, width, tyre, rim) {
   }
 }
 
-/**
- * The merged geometry for one car. Returns { body, lights, shape } where body and lights are
- * geometries with vertex colours, ready for a MeshStandardMaterial / MeshBasicMaterial.
- */
-function buildCarGeometry(kind, paintHex) {
+/** The merged geometry for one car: { body, lights, shape }, both with vertex colours. */
+function carGeometry(kind, paintHex) {
   const key = `${kind}|${paintHex}`;
-  const hit = bodyCache.get(key);
+  const hit = built.get(key);
   if (hit) return hit;
 
-  const k = CAR_KINDS[kind] ?? CAR_KINDS.sedan;
-  const body = new MeshBuilder(
+  const k = SHAPES[kind] ?? SHAPES.sedan;
+  const body = new Batch(
     new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.42, metalness: 0.3 }),
     { castShadow: true, receiveShadow: false },
   );
-  const lamps = new MeshBuilder(new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false }), {
+  const lamps = new Batch(new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false }), {
     castShadow: false,
     receiveShadow: false,
   });
@@ -119,22 +116,25 @@ function buildCarGeometry(kind, paintHex) {
     lamps.box(sx * k.wid * 0.31, y0 + k.sill * 0.72, k.len / 2 + 0.02, 0.36, 0.14, 0.05, { tile: [1, 1], colour: head });
     lamps.box(sx * k.wid * 0.31, y0 + k.sill * 0.8, -k.len / 2 - 0.02, 0.34, 0.13, 0.05, { tile: [1, 1], colour: tail });
   }
-  // A taxi wears its sign; a van gets a plain roof box.
+  // A taxi wears its sign.
   if (kind === 'cab') lamps.box(0, y0 + k.roof + 0.16, -k.len * 0.04, 0.66, 0.18, 0.28, { tile: [1, 1], colour: rgb('#ffd23c') });
 
   const out = { body: body.toGeometry(), lights: lamps.toGeometry(), shape: k };
-  bodyCache.set(key, out);
+  built.set(key, out);
   return out;
 }
 
-/**
- * A car mesh: body, lamps, and a contact shadow. The lamp material is cloned per car so a brake
- * light can brighten without lighting the whole fleet.
- */
-export function makeCarMesh(kind, paintHex) {
-  const geo = buildCarGeometry(kind, paintHex);
+let bodyMaterial = null;
+function sharedBody() {
+  if (!bodyMaterial) bodyMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.42, metalness: 0.3 });
+  return bodyMaterial;
+}
+
+/** A car mesh: body, lamps and a contact shadow. The lamps are per-car so brakes can brighten. */
+export function carMesh(kind, paintHex) {
+  const geo = carGeometry(kind, paintHex);
   const group = new THREE.Group();
-  const body = new THREE.Mesh(geo.body, carBodyMaterial());
+  const body = new THREE.Mesh(geo.body, sharedBody());
   body.castShadow = true;
   const lights = new THREE.Mesh(geo.lights, new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false }));
   const shadow = new THREE.Mesh(new THREE.PlaneGeometry(geo.shape.wid * 2.1, geo.shape.len * 1.25), shadowMaterial);
@@ -145,28 +145,19 @@ export function makeCarMesh(kind, paintHex) {
   return { group, body, lights, shadow, shape: geo.shape };
 }
 
-let sharedBodyMaterial = null;
-function carBodyMaterial() {
-  if (!sharedBodyMaterial) {
-    sharedBodyMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.42, metalness: 0.3 });
-  }
-  return sharedBodyMaterial;
-}
-
 /**
- * Dress a cruiser: navy flank panels, a door badge, a roof light bar with a red and a blue lamp,
- * a halo around each and a pool of red/blue light on the road. Returns the parts the frame loop
+ * Dress a cruiser: navy flank panels, a door badge, a roof bar with a red and a blue lamp, a halo
+ * round each, and a pool of red or blue light on the road. Returns the parts the frame loop
  * flashes.
  */
-export function dressCruiser(mesh) {
+export function dressAsCruiser(mesh) {
   const k = mesh.shape;
   const top = 0.34 + k.sill + k.deck + k.cabin;
-  const livery = new MeshBuilder(new THREE.MeshLambertMaterial({ color: new THREE.Color('#1b2b57') }));
+  const livery = new Batch(new THREE.MeshLambertMaterial({ color: new THREE.Color('#1b2b57') }));
   for (const sx of [-1, 1]) {
     livery.box(sx * (k.wid / 2 + 0.02), 0.72, -0.1, 0.04, 0.34, k.len * 0.66, { tile: [2, 1] });
     livery.box(sx * (k.wid / 2 + 0.05), 0.86, 0.5, 0.03, 0.5, 1.5, { tile: [1, 1] });
   }
-  const liveryMesh = livery.toMesh('livery');
 
   const bar = new THREE.Mesh(
     new THREE.BoxGeometry(1.3, 0.11, 0.34),
@@ -174,7 +165,7 @@ export function dressCruiser(mesh) {
   );
   bar.position.set(0, top + 0.06, -0.1);
 
-  const lamp = (colour, x) => {
+  const beacon = (colour, x) => {
     const g = new THREE.Group();
     const core = new THREE.Mesh(
       new THREE.BoxGeometry(0.46, 0.19, 0.3),
@@ -197,8 +188,8 @@ export function dressCruiser(mesh) {
     g.position.set(x, top + 0.2, -0.1);
     return g;
   };
-  const red = lamp('#ff2a48', -0.34);
-  const blue = lamp('#3d7bff', 0.34);
+  const red = beacon('#ff2a48', -0.34);
+  const blue = beacon('#3d7bff', 0.34);
   const glow = new THREE.Mesh(
     new THREE.PlaneGeometry(13, 9),
     new THREE.MeshBasicMaterial({
@@ -214,10 +205,6 @@ export function dressCruiser(mesh) {
   glow.position.y = 0.06;
   glow.renderOrder = 2;
 
-  mesh.group.add(liveryMesh, bar, red, blue, glow);
+  mesh.group.add(livery.toMesh('livery'), bar, red, blue, glow);
   return { red, blue, glow };
 }
-
-/** The default paint of a taxi, so the traffic module and the staging module agree. */
-export const TAXI_PAINT = '#ffcc33';
-export const CRUISER_PAINT = '#f2f3f5';

@@ -1,35 +1,36 @@
-// The numbers the city is built out of. Everything downstream reads from here rather than
-// carrying literals of its own, so the world can be re-proportioned in one place.
+// Every number the city is made of, in one place.
 //
-// One unit is one metre. A block is 264 m on a side with a 48 m avenue between them; a person is
-// 1.7 m tall; the camera rides a couple of metres over the asphalt. Seven avenues each way make
-// a town about 1.6 km across, the sea closes the west side, and the marina closes the south.
+// One unit is a metre. A block is 264 m across with a 48 m avenue between blocks, so the avenues
+// sit on multiples of 264 and their kerbs 24 m either side of the centre line. Seven lines each
+// way make a town about 1.6 km across; the gulf closes the west side and the marina the south.
+// Nothing downstream hard-codes these: the layout, the traffic, the police and the camera all read
+// them from here, so the whole world can be re-proportioned by editing this file alone.
 
-export const MAP = {
+export const GRID = {
   cols: 7,
   rows: 7,
   block: 264,
   road: 48,
-  walkInset: 12,
+  inset: 12, // pavement ring between a kerb and the first building
 };
 
 export const TOWN = {
-  min: -MAP.road / 2,
-  max: (MAP.cols - 1) * MAP.block + MAP.road / 2,
+  min: -GRID.road / 2,
+  max: (GRID.cols - 1) * GRID.block + GRID.road / 2,
 };
 
 // How the player moves on foot.
 export const GAIT = {
   walk: 4.1,
   run: 8.6,
-  turn: 11,
-  body: 0.42,
-  reach: 3.4, // how close a car has to be before its door opens
+  turn: 11, // radians a second the body swings round
+  body: 0.42, // the radius the walls are tested against
+  reach: 3.4, // how close a car must be before its door opens
 };
 
 // And in a car.
 export const DRIVE = {
-  topSpeed: 38,
+  top: 38,
   reverse: 13,
   accel: 9.5,
   brake: 24,
@@ -38,11 +39,11 @@ export const DRIVE = {
 };
 
 // The pistol.
-export const WEAPON = {
+export const GUN = {
   clip: 17,
   reserve: 68,
   reload: 1.25,
-  cadence: 0.17,
+  rate: 0.17,
   range: 95,
   speed: 210,
   spread: 0.018,
@@ -58,12 +59,12 @@ export const TRAFFIC = { count: 34 };
 
 export const LAW = {
   maxStars: 5,
-  cruisersPerStar: [0, 1, 2, 3, 4, 5],
+  perStar: [0, 1, 2, 3, 4, 5], // cruisers on the street at each wanted level
   crew: 2,
   copRun: 5.6,
   copWalk: 3.2,
   fireGap: 0.62,
-  bulletSpeed: 150,
+  bullet: 150,
   copRange: 58,
   coolAfter: 9,
   coolFor: 6,
@@ -71,7 +72,7 @@ export const LAW = {
   spawnMax: 230,
 };
 
-// A low sun over the gulf: west and a little south, so every avenue runs into the light.
+// A low sun over the gulf: west and a little south, so the avenues run into the light.
 export const SUN = {
   azimuth: Math.PI * 0.965,
   height: 0.4,

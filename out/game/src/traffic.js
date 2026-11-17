@@ -1,10 +1,10 @@
 // Traffic: what a car is on this street, and how it drives when nobody is in it.
 //
-// A car in the traffic holds a heading (one of four axes), the avenue it runs along and which
-// side of the centre line it keeps to. It accelerates toward its own cruise speed, but the sensor
-// in front of its nose looks down the lane for the nearest thing - another car, the player's car,
-// a cruiser, a body in the road - and the throttle falls away with the gap, so a boulevard queues
-// behind a stalled taxi and then flows again.
+// A car in the traffic holds a heading (one of four axes), the avenue it runs along and which side
+// of the centre line it keeps. It accelerates to its own cruise speed, but the sensor in front of
+// its nose looks down the lane for the nearest thing — another car, the player's car, a cruiser,
+// a body in the road — and the throttle falls away with the gap, so a boulevard queues behind a
+// stalled taxi and then flows again.
 //
 // At a junction a car may turn. A turn is never a snap: the car hands its position to a quadratic
 // laid from where it is, round the middle of the crossing, onto the lane of its new avenue, and
@@ -12,14 +12,14 @@
 // turns is a grid that jams.
 //
 // `parked` cars sit at the kerb with the engine off until somebody steals one; `stolen` cars are
-// driven by the player and this module stops touching them.
+// the player's and this module stops touching them.
 
-import { TRAFFIC, PALETTE } from './tuning.js';
-import { avenues, HALF_ROAD } from './city.js';
-import { makeRandom } from './rng.js';
-import { CAR_KINDS, TAXI_PAINT } from './vehicles.js';
+import { TRAFFIC, PALETTE } from './settings.js';
+import { avenues, HALF_ROAD } from './layout.js';
+import { rngFrom } from './random.js';
+import { SHAPES, TAXI_PAINT } from './vehicles.js';
 
-export const LANE = 5.4; // lane centre, from the avenue's middle line
+export const LANE = 5.4; // a lane's centre, from the avenue's middle line
 export const DIRECTIONS = [
   { dx: 1, dz: 0 },
   { dx: -1, dz: 0 },
@@ -39,10 +39,9 @@ export function axisOf(yaw) {
   return { dx: 0, dz: Math.sin(yaw) >= 0 ? 1 : -1 };
 }
 
-/** A car record. `x, z` is its centre; `yaw` its heading from +x; `len` its length along that. */
+/** A car record. `x, z` is its centre, `yaw` its heading from +x, `len` its length along that. */
 export function newCar(kind, x, z, yaw, paint, extra = {}) {
-  const shape = CAR_KINDS[kind] ?? CAR_KINDS.sedan;
-  const dir = axisOf(yaw);
+  const shape = SHAPES[kind] ?? SHAPES.sedan;
   return {
     kind,
     len: shape.len,
@@ -52,7 +51,7 @@ export function newCar(kind, x, z, yaw, paint, extra = {}) {
     z,
     yaw,
     speed: 0,
-    dir,
+    dir: axisOf(yaw),
     line: 0,
     turn: null,
     cool: 0,
@@ -66,7 +65,7 @@ export function newCar(kind, x, z, yaw, paint, extra = {}) {
   };
 }
 
-/** A car sitting exactly in the lane of avenue `line`, `along` metres up it, heading `dir`. */
+/** A car seated in the lane of avenue `line`, `along` metres up it, heading `dir`. */
 export function carInLane(kind, line, along, dir, paint, extra = {}) {
   const off = laneOffset(dir);
   const x = dir.dx !== 0 ? along : line + off;
@@ -77,7 +76,7 @@ export function carInLane(kind, line, along, dir, paint, extra = {}) {
   return car;
 }
 
-/** A car at the kerb: in the lane but pushed a metre and a half toward the pavement, engine off. */
+/** A car at the kerb: in the lane but pushed toward the pavement, engine off. */
 export function kerbCar(kind, line, along, dir, paint) {
   const car = carInLane(kind, line, along, dir, paint, { parked: true, occupied: false });
   const off = laneOffset(dir);
@@ -91,17 +90,14 @@ function progress(car) {
   return car.dir.dx !== 0 ? car.x : car.z;
 }
 
-/** True when a coordinate is inside a junction box, where cars must not be born. */
+/** True inside a junction box, where cars must not be born. */
 function inJunction(v) {
   return avenues().some((line) => Math.abs(v - line) < HALF_ROAD + 2);
 }
 
-/**
- * The seeded fleet: cars spread over the avenues with a few kerb cars mixed in. Colours come from
- * the palette, except the taxis which are always yellow.
- */
+/** The seeded fleet: cars spread over the avenues, with a few kerb cars mixed in. */
 export function seedTraffic(seed = 7) {
-  const rand = makeRandom(seed * 11 + 3);
+  const rand = rngFrom(seed * 11 + 3);
   const lines = avenues();
   const low = -HALF_ROAD + 40;
   const high = lines[lines.length - 1] + HALF_ROAD - 40;
@@ -123,7 +119,7 @@ export function seedTraffic(seed = 7) {
     cars.push(car);
   }
 
-  // A handful left at the kerb, where the player can walk up and take one.
+  // A handful left at the kerb where the player can walk up and take one.
   for (let i = 0; i < 6; i += 1) {
     const dir = rand.pick(DIRECTIONS);
     const line = rand.pick(lines);
@@ -139,9 +135,9 @@ export function seedTraffic(seed = 7) {
 /**
  * Advance every AI car one step.
  *
- * `blockers` are the bodies a car must not drive through: the player's car and each cruiser, as
- * {x, z, len}. `playerOnFoot` is the player's position when they are not in a car, so traffic
- * stops for somebody standing in the lane rather than driving over them.
+ * `blockers` are bodies a car must not drive through — the player's car and each cruiser — given
+ * as {x, z, len}. `playerOnFoot` is the player's position when they are not in a car, so traffic
+ * stops for somebody standing in the lane instead of driving over them.
  */
 export function driveTraffic(cars, dt, blockers = [], playerOnFoot = null) {
   for (const car of cars) {
@@ -149,7 +145,7 @@ export function driveTraffic(cars, dt, blockers = [], playerOnFoot = null) {
     car.cool = Math.max(0, car.cool - dt);
     car.lights = Math.max(0, car.lights - dt * 3.2);
 
-    // ---- the sensor: nearest body ahead, inside the lane.
+    // ---- the sensor: the nearest body ahead, inside the lane.
     let gap = 120;
     for (const other of cars) {
       if (other === car) continue;
@@ -175,7 +171,8 @@ export function driveTraffic(cars, dt, blockers = [], playerOnFoot = null) {
     const want = gap < 5 ? 0 : gap < 26 ? car.cruise * (0.18 + 0.032 * gap) : car.cruise;
     const rate = want < car.speed ? 5.2 : 1.15;
     car.speed += (want - car.speed) * Math.min(1, dt * rate);
-    if (car.speed < want - 1.4) car.lights = Math.min(1, car.lights + dt * 7);
+    // Brake lights: harder the faster the throttle is falling away from the speed.
+    if (want < car.speed - 0.4) car.lights = Math.min(1, car.lights + dt * (want < 0.5 ? 9 : 5));
 
     if (car.turn) {
       followTurn(car, dt);
@@ -197,7 +194,7 @@ export function driveTraffic(cars, dt, blockers = [], playerOnFoot = null) {
     }
     if (car.turn) continue;
 
-    // ---- straight on down the lane, easing back to the centre of it.
+    // ---- straight on down the lane, easing back to the middle of it.
     const target = car.line + laneOffset(car.dir);
     if (car.dir.dx !== 0) car.z += (target - car.z) * Math.min(1, dt * 2.2);
     else car.x += (target - car.x) * Math.min(1, dt * 2.2);
@@ -205,11 +202,10 @@ export function driveTraffic(cars, dt, blockers = [], playerOnFoot = null) {
     car.z += car.dir.dz * car.speed * dt;
     car.yaw = Math.atan2(car.dir.dz, car.dir.dx);
 
-    // ---- off the end of the grid: turn round onto the other lane of the same avenue.
+    // ---- off the end of the grid: turn round onto the other lane of the nearest avenue.
     const ends = avenueEnds();
     if (at < ends.min - 8 || at > ends.max + 8) {
       car.dir = { dx: -car.dir.dx, dz: -car.dir.dz };
-      car.line = avenues()[0];
       let best = Infinity;
       for (const line of avenues()) {
         const d = Math.abs((car.dir.dx !== 0 ? car.z : car.x) - line);
@@ -225,13 +221,14 @@ export function driveTraffic(cars, dt, blockers = [], playerOnFoot = null) {
 
 /** The far kerbs of the grid, where a car that drives off the end turns round. */
 export function avenueEnds() {
-  return { min: -HALF_ROAD, max: avenues()[avenues().length - 1] + HALF_ROAD };
+  const lines = avenues();
+  return { min: -HALF_ROAD, max: lines[lines.length - 1] + HALF_ROAD };
 }
 
 /**
- * Start a turn through the junction at (cx, cz). The car leaves the junction a lane offset to the
- * right of its new heading, and the control point sits in the corner it turns through so the arc
- * bends the right way and never cuts the middle of the crossing.
+ * Begin a turn through the junction at (cx, cz). The car leaves the junction a lane offset to the
+ * right of its new heading, and the control point sits on the corner it turns through, so the arc
+ * bends the right way and never cuts across the middle of the crossing.
  */
 function beginTurn(car, line, roll) {
   const onX = car.dir.dx !== 0;
@@ -250,7 +247,7 @@ function beginTurn(car, line, roll) {
   car.cool = 6;
 }
 
-/** Walk the quadratic a car is turning along, and land it in the new lane facing the new way. */
+/** Walk the quadratic a turning car is on, and land it in the new lane facing the new way. */
 function followTurn(car, dt) {
   const t = car.turn;
   t.t = Math.min(1, t.t + (t.pace * dt) / t.len);

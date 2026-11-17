@@ -3,28 +3,27 @@
 // Stars. Crime raises `stars`, from 1 to 5. Each star buys one more cruiser on the street.
 //
 // Cruisers. A cruiser is born on an avenue 150 to 230 m from the player and outside the frame's
-// view cone, so the heat arrives from behind or from round a corner and never from thin air. It
-// drives at the player by heading for the point a moment ahead of them, steering around whatever
-// is directly in front. Inside about 34 m it kills the engine and the crew dismounts.
+// view cone, so the heat arrives from behind or round a corner and never from thin air. It drives
+// at the player by heading for the point a moment ahead of them, steering round whatever is
+// directly in front. Inside about 34 m it kills the engine and the crew dismounts.
 //
 // Officers. They leave the car on the side away from the player, hold the ground between 9 and
 // 30 m, fire on a cadence at any line of sight inside `copRange`, and close in otherwise. Three
 // rounds put one down; the player's rounds are resolved by the scene and reported through
-// `hitOfficer`.
+// hitOfficer.
 //
 // Cooling. `seen` is true while any cruiser or officer has a clear line to the player. After
 // `coolAfter` seconds out of sight the heat starts to drain, and each `coolFor` seconds of quiet
 // costs a star; losing the last one sends the board home.
 
-import { LAW } from './tuning.js';
-import { avenues, HALF_ROAD } from './city.js';
-import { makeRandom, foldAngle } from './rng.js';
+import { LAW } from './settings.js';
+import { avenues, HALF_ROAD } from './layout.js';
+import { rngFrom, wrap } from './random.js';
 import { newCar } from './traffic.js';
 import { CRUISER_PAINT } from './vehicles.js';
 
 /** A police state: no stars, no units, no rounds in the air. */
 export function newPolice(seed = 3) {
-  const rand = makeRandom(seed * 13 + 5);
   return {
     stars: 0,
     heat: 0,
@@ -32,7 +31,7 @@ export function newPolice(seed = 3) {
     seen: false,
     units: [],
     rounds: [],
-    rand,
+    rand: rngFrom(seed * 13 + 5),
     alarm: 0,
     killed: 0,
     busted: 0,
@@ -42,14 +41,14 @@ export function newPolice(seed = 3) {
 }
 
 /**
- * A crime worth `n` stars. One star for a shot or a body seen; two or more for grand theft with a
- * witness. Raising the level from clean jumps straight to `n`; raising it when already wanted goes
- * up one at a time, so a spree escalates rather than teleporting to five.
+ * A crime worth `n` stars. A shot is one; a body is three; grand theft with a witness is two.
+ * Raising the level from clean jumps straight to `n`; raising it while already wanted goes up one
+ * at a time, so a spree escalates rather than teleporting to five.
  */
 export function raiseHeat(police, n = 1) {
   const before = police.stars;
   if (before === 0) police.stars = Math.min(LAW.maxStars, Math.max(1, n));
-  else police.stars = Math.min(LAW.maxStars, Math.max(before, before + (n >= 2 ? 1 : 1)));
+  else police.stars = Math.min(LAW.maxStars, before + 1);
   if (police.stars > before) police.alarm = 1.6;
   police.heat = 1;
   police.quiet = 0;
@@ -98,6 +97,7 @@ function newCrew(x, z, yaw, rand) {
       moving: 0,
       inCar: true,
       flash: 0,
+      collar: false,
     });
   }
   return crew;
@@ -119,9 +119,6 @@ export function newUnit(x, z, yaw, police, extra = {}) {
     tag: `vmpd-${String(police.units.length + 1).padStart(2, '0')}`,
     age: 0,
     siren: 0,
-    // The grid leg the cruiser is on: it travels along `axis` on the avenue at `line`.
-    axis: Math.abs(Math.cos(yaw)) >= Math.abs(Math.sin(yaw)) ? 'x' : 'z',
-    line: Math.abs(Math.cos(yaw)) >= Math.abs(Math.sin(yaw)) ? z : x,
     ...extra,
   };
   police.units.push(unit);
@@ -129,16 +126,12 @@ export function newUnit(x, z, yaw, police, extra = {}) {
 }
 
 /**
- * Put a cruiser on the map out of sight: a point on the avenue that actually leads to the player,
+ * Put a cruiser on the map out of sight: a point on an avenue that actually leads to the player,
  * at the wanted distance, with the bearing wide of the camera's forward direction.
  *
  * The avenue matters. A car that runs along x must sit on an avenue whose z is near the player's,
  * and one that runs along z on an avenue whose x is near the player's; otherwise it is born on the
- * far side of the grid and spends the whole chase driving across town.
- *
- * It arrives along its four closest avenues, one after another: a point 150 m down the nearest
- * line is offered first, and only if that is in the player's view (or already has a cruiser on it)
- * does it try the next line out. Cruisers therefore come down the streets that lead here.
+ * far side of the grid and spends the whole chase crossing town.
  */
 function pickSpawn(police, player, viewYaw) {
   const rand = police.rand;
@@ -169,11 +162,11 @@ function pickSpawn(police, player, viewYaw) {
     if (x < min || x > max || z < min || z > max) continue;
     if (police.units.some((u) => Math.hypot(u.x - x, u.z - z) < 60)) continue;
     const bearing = Math.atan2(z - player.z, x - player.x);
-    if (Math.abs(foldAngle(bearing - viewYaw)) < 1.15) continue;
+    if (Math.abs(wrap(bearing - viewYaw)) < 1.15) continue;
     return { x, z, dx: dir.dx, dz: dir.dz };
   }
-  // Nothing out of sight: any point on the nearest avenue at range will do, and the cruiser
-  // shows up over the horizon rather than not at all.
+  // Nothing out of sight: any point on the nearest avenue at range will do, and the cruiser shows
+  // up over the horizon rather than not at all.
   const across = player.z;
   const line = lines.reduce((best, l) => (Math.abs(l - across) < Math.abs(best - across) ? l : best), lines[0]);
   const d = LAW.spawnMin;
@@ -186,8 +179,8 @@ function pickSpawn(police, player, viewYaw) {
 /**
  * Step the response by dt. `ctx` carries the player (with an approximate velocity), the solid
  * blockers the cruisers must not drive through, a muzzle callback for each officer's shot, the
- * camera yaw (for spawning out of view), and `hitTest`/`onHit`: the predicate that says whether a
- * police round has found the player, and what to do about it.
+ * camera yaw (for spawning out of view), and hitTest/onHit: whether a police round has found the
+ * player, and what to do about it.
  */
 export function runPolice(police, dt, layout, ctx) {
   const { player, blockers = [], onFire = null, viewYaw = 0, hitTest = null, onHit = null } = ctx;
@@ -223,7 +216,7 @@ export function runPolice(police, dt, layout, ctx) {
   }
 
   // ---- the quota: one cruiser per star, arriving out of sight.
-  const want = police.stars > 0 ? LAW.cruisersPerStar[police.stars] ?? police.stars : 0;
+  const want = police.stars > 0 ? LAW.perStar[police.stars] ?? police.stars : 0;
   if (police.units.length < want && police.clock >= police.nextSpawn) {
     const spot = pickSpawn(police, player, viewYaw);
     if (spot) {
@@ -250,8 +243,8 @@ export function runPolice(police, dt, layout, ctx) {
       stepOfficer(police, o, dt, layout, player, onFire);
     }
   }
-  // ---- the rounds the officers have fired, walked in short hops so none tunnels through the
-  // player at 150 m/s, and stopped by the first wall they meet.
+  // ---- the rounds, walked in short hops so none tunnels through the player at 150 m/s, and
+  // stopped by the first wall they meet.
   for (let i = police.rounds.length - 1; i >= 0; i -= 1) {
     const s = police.rounds[i];
     const travel = Math.hypot(s.vx, s.vz) * dt;
@@ -292,16 +285,15 @@ const ON_STREET = 26;
  * The point a cruiser drives at next.
  *
  * It drives the streets, not the straight line. Two cases:
- *
- *   - It is already on one of the player's streets (within `ON_STREET` of the player's avenue on
- *     the axis it is travelling, or on the player's cross street). Then the straight line to the
- *     player runs down that street, and it takes it.
+ *   - It is already on one of the player's streets (within ON_STREET of the player's avenue on the
+ *     axis it travels, or on the player's cross street). Then the straight line to the player runs
+ *     down that street and it takes it.
  *   - It is not. Then it runs to the junction of its own avenue and the player's other avenue,
  *     which puts it on a street that leads to the player.
  *
- * The gap between the two cases is what stops the old failure: a car that aims at a corner it can
- * never quite reach orbits it for ever, at full throttle, and never arrives. Aiming at a street
- * means the target is a long line, not a point, so overshooting is harmless.
+ * The gap between the cases is what stops the old failure: a car aiming at a corner it can never
+ * quite reach orbits it for ever at full throttle and never arrives. Aiming at a street means the
+ * target is a long line, not a point, so overshooting is harmless.
  */
 function routeTo(u, player) {
   const ownX = nearestAvenue(u.x);
@@ -313,7 +305,6 @@ function routeTo(u, player) {
   const onPlayerStreetZ = Math.abs(u.x - targetX) < ON_STREET;
   if (onPlayerStreetX || onPlayerStreetZ) return { x: player.x, z: player.z };
 
-  // Off the player's streets: head for the junction that joins ours to theirs.
   const onNS = Math.abs(u.x - ownX) < Math.abs(u.z - ownZ);
   if (onNS) return { x: ownX, z: targetZ };
   return { x: targetX, z: ownZ };
@@ -323,9 +314,9 @@ function routeTo(u, player) {
  * Drive one cruiser down the streets to the player.
  *
  * A cruiser that simply aims at the player wedges itself into the corner of a block within a
- * hundred metres. So it follows the grid (see `routeTo`) until it is on a street that leads to the
- * player, and takes the straight line only then. Anything directly in front of the nose bends the
- * wheel away from it, and a wall it does hit costs it most of its speed.
+ * hundred metres, so it follows the grid until it is on a street that leads to the player and only
+ * then takes the straight line. Anything directly in front of the nose bends the wheel away from
+ * it, and a wall it does hit costs most of its speed.
  */
 function driveCruiser(u, dt, layout, player, blockers) {
   const dx = player.x - u.x;
@@ -344,7 +335,7 @@ function driveCruiser(u, dt, layout, player, blockers) {
     aim.z += (player.vz ?? 0) * 0.35;
   }
 
-  let steer = foldAngle(Math.atan2(aim.z - u.z, aim.x - u.x) - u.yaw);
+  let steer = wrap(Math.atan2(aim.z - u.z, aim.x - u.x) - u.yaw);
   for (const b of blockers) {
     if (b === u.car) continue;
     const fx = b.x - u.x;
@@ -386,7 +377,7 @@ function driveCruiser(u, dt, layout, player, blockers) {
       o.z = clear ? oz : u.z;
       o.inCar = false;
       o.yaw = Math.atan2(player.z - o.z, player.x - o.x);
-      // The first officer out of the car is the one who walks in to make the arrest.
+      // The first officer out is the one who walks in to make the collar.
       o.collar = i === 0;
     }
   }
@@ -406,8 +397,8 @@ function stepOfficer(police, o, dt, layout, player, onFire) {
   o.yaw = Math.atan2(dz, dx);
   const sight = lineOfSight(layout, o, player);
 
-  // Most of the crew holds the ground between 9 and 30 m and shoots from there. One of them -
-  // whoever was put out first - walks in to make the collar: an arrest needs a hand on a shoulder,
+  // Most of the crew holds the ground between 9 and 30 m and shoots from there. One of them —
+  // whoever was put out first — walks in to make the collar: an arrest needs a hand on a shoulder,
   // and a crew that only ever shoots from across the street means the player is never busted.
   const closer = o.collar === true;
   let move = 0;
@@ -435,9 +426,9 @@ function stepOfficer(police, o, dt, layout, player, onFire) {
     police.rounds.push({
       x: o.x + Math.cos(a) * 0.6,
       z: o.z + Math.sin(a) * 0.6,
-      vx: Math.cos(a) * LAW.bulletSpeed,
-      vz: Math.sin(a) * LAW.bulletSpeed,
-      life: LAW.copRange / LAW.bulletSpeed,
+      vx: Math.cos(a) * LAW.bullet,
+      vz: Math.sin(a) * LAW.bullet,
+      life: LAW.copRange / LAW.bullet,
       y: 1.35,
     });
     if (onFire) onFire(o, a);

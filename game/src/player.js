@@ -1,18 +1,19 @@
 // The player: the body on the street, the hands on the wheel, and the pistol.
 //
-// This module owns everything about the player that is not a rendering decision. It moves them on
-// foot with a wall slide, gets them in and out of cars, steers a car they have taken, fires the
-// pistol and lets rounds fly, takes damage through armour and dies. It also keeps the wallet's
-// saved progress in localStorage, so a run survives a reload.
+// Everything about the player that is not a rendering decision lives here. They walk with a wall
+// slide, get in and out of cars, steer a car they have taken, fire the pistol and let the rounds
+// fly, take damage through armour and die. The wallet's saved progress lives in localStorage, so a
+// run survives a reload.
 //
-// The input arrives as plain data - { move: {x, z}, aim: {x, z} | null, fire, use, run, reload } -
-// with `move` already in world space, which is what lets a staged screenshot drive the player with
+// The input arrives as plain data — { move: {x, z}, aim: {x, z} | null, fire, use, run, reload } —
+// with `move` already in world space, which is what lets a staged screenshot drive the player from
 // a script instead of a keyboard.
 
-import { GAIT, DRIVE, WEAPON } from './tuning.js';
-import { stepAngle, foldAngle, makeRandom } from './rng.js';
+import { GAIT, DRIVE, GUN } from './settings.js';
+import { turnToward } from './random.js';
 
 const SAVE_KEY = 'vice-meridian/save/v1';
+
 // Where the player starts, and where they wake up after an arrest or a bad night.
 export const HOME = { x: 300, z: 1040 };
 
@@ -31,8 +32,8 @@ export function newPlayer(x = HOME.x, z = HOME.z) {
     hp: 100,
     hpMax: 100,
     armour: 0,
-    clip: WEAPON.clip,
-    ammo: WEAPON.reserve,
+    clip: GUN.clip,
+    ammo: GUN.reserve,
     reload: 0,
     cool: 0,
     muzzle: 0,
@@ -46,8 +47,8 @@ export function newPlayer(x = HOME.x, z = HOME.z) {
 // ---------------------------------------------------------------- on foot
 
 /**
- * Walk, on the frame's input. The body turns toward the walk vector and the chest and gun arm
- * follow the aim, so a player can strafe with the pistol held on a target.
+ * Walk, on the frame's input. The body turns toward the walk vector while the chest and gun arm
+ * follow the aim, so the player can strafe with the pistol held on a target.
  */
 export function walkPlayer(sim, dt, input) {
   const p = sim.player;
@@ -61,13 +62,12 @@ export function walkPlayer(sim, dt, input) {
   if (mag > 0.01) {
     p.moving = 1;
     p.running = running ? 1 : 0;
-    const sp = p.speed;
-    const dx = (move.x / mag) * sp * dt;
-    const dz = (move.z / mag) * sp * dt;
+    const dx = (move.x / mag) * p.speed * dt;
+    const dz = (move.z / mag) * p.speed * dt;
     slideBody(sim, p, dx, dz);
-    p.phase += dt * (running ? 12.5 : 7.0) * Math.min(1.15, sp / GAIT.walk);
+    p.phase += dt * (running ? 12.5 : 7.0) * Math.min(1.15, p.speed / GAIT.walk);
     p.walkYaw = Math.atan2(move.z, move.x);
-    p.yaw = stepAngle(p.yaw, p.walkYaw, GAIT.turn * dt);
+    p.yaw = turnToward(p.yaw, p.walkYaw, GAIT.turn * dt);
   } else {
     p.moving = 0;
     p.running = 0;
@@ -88,9 +88,9 @@ function slideBody(sim, p, dx, dz) {
 // ---------------------------------------------------------------- driving
 
 /**
- * Steer the car under the player. Throttle comes from W, the brake from S, the wheel from A and D.
- * Steering falls off with speed, so a car at forty metres a second cannot swing like one at ten,
- * and a wall scrapes the car down to a stop and costs a little health.
+ * Steer the car under the player. Throttle from W, brake from S, wheel from A and D. Steering falls
+ * off with speed, so a car at forty metres a second cannot swing like one at ten; and a wall
+ * scrapes the car down to a stop and costs a little health.
  */
 export function drivePlayer(sim, dt, input) {
   const p = sim.player;
@@ -101,17 +101,17 @@ export function drivePlayer(sim, dt, input) {
   const wheel = input.move?.x ?? 0;
 
   if (throttle) {
-    const bite = 1 - Math.min(0.75, (Math.abs(car.speed) / DRIVE.topSpeed) * 0.9);
+    const bite = 1 - Math.min(0.75, (Math.abs(car.speed) / DRIVE.top) * 0.9);
     car.speed += DRIVE.accel * bite * dt;
   } else if (brake) {
     car.speed -= DRIVE.brake * dt * (car.speed > 0 ? 1 : 0.35);
   } else {
     car.speed -= Math.sign(car.speed) * DRIVE.coast * dt;
   }
-  car.speed = Math.max(-DRIVE.reverse, Math.min(DRIVE.topSpeed, car.speed));
+  car.speed = Math.max(-DRIVE.reverse, Math.min(DRIVE.top, car.speed));
   if (Math.abs(car.speed) < 0.2 && !throttle) car.speed = 0;
 
-  const grip = Math.min(1, Math.abs(car.speed) / 9) * (1 - Math.min(0.55, (Math.abs(car.speed) / DRIVE.topSpeed) * 0.55));
+  const grip = Math.min(1, Math.abs(car.speed) / 9) * (1 - Math.min(0.55, (Math.abs(car.speed) / DRIVE.top) * 0.55));
   car.yaw += wheel * DRIVE.steer * grip * dt * (car.speed < -0.5 ? -1 : 1);
   car.lights = brake || (car.speed < 1 && throttle) ? 1 : Math.max(0, car.lights - dt * 4);
 
@@ -222,25 +222,13 @@ export function enterCar(sim, car) {
 /** Start a reload if there is anything to reload with. */
 export function reloadWeapon(sim) {
   const p = sim.player;
-  if (p.reload > 0 || p.clip >= WEAPON.clip || p.ammo <= 0) return;
-  p.reload = WEAPON.reload;
-}
-
-function tickReload(sim, dt) {
-  const p = sim.player;
-  if (p.reload <= 0) return;
-  p.reload -= dt;
-  if (p.reload > 0) return;
-  const take = Math.min(WEAPON.clip - p.clip, p.ammo);
-  p.clip += take;
-  p.ammo -= take;
-  if (take > 0) sim.events.onReload?.();
+  if (p.reload > 0 || p.clip >= GUN.clip || p.ammo <= 0) return;
+  p.reload = GUN.reload;
 }
 
 /**
- * Fire one round down the aim. Sends a record into sim.rounds which the scene walks forward and
- * resolves; the headwind of heat and the crowd's reaction are the scene's business, handled
- * through onCrime.
+ * Fire one round down the aim. It goes into sim.rounds for the scene to walk forward and resolve;
+ * the heat it raises and the crowd's reaction are the scene's business, through onCrime.
  */
 export function fireWeapon(sim) {
   const p = sim.player;
@@ -250,19 +238,19 @@ export function fireWeapon(sim) {
     return false;
   }
   p.clip -= 1;
-  p.cool = WEAPON.cadence;
+  p.cool = GUN.rate;
   p.muzzle = 1;
   p.recoil = 1;
   sim.shake = Math.max(sim.shake, 0.22);
   sim.story.shots += 1;
 
-  const a = p.aimYaw + (sim.rand() - 0.5) * WEAPON.spread * 2;
+  const a = p.aimYaw + (sim.rand() - 0.5) * GUN.spread * 2;
   const from = p.driving ? { x: p.driving.x, z: p.driving.z } : { x: p.x, z: p.z };
   sim.rounds.push({
     x: from.x + Math.cos(a) * 1.0,
     z: from.z + Math.sin(a) * 1.0,
-    vx: Math.cos(a) * WEAPON.speed,
-    vz: Math.sin(a) * WEAPON.speed,
+    vx: Math.cos(a) * GUN.speed,
+    vz: Math.sin(a) * GUN.speed,
     y: p.driving ? 1.1 : 1.3,
     travelled: 0,
     life: 2,
@@ -322,7 +310,7 @@ export function loadProgress(story, jobCount) {
 
 /**
  * Walk a round in hops small enough that it cannot tunnel through a person, a wall or an officer.
- * `hit` is called at each hop with the round; it returns true when the round has been consumed.
+ * `hit` is called at each hop with the round and returns true when the round has been consumed.
  * Returns true when the round is finished with.
  */
 export function advanceRound(sim, r, dt, hit) {
@@ -336,7 +324,5 @@ export function advanceRound(sim, r, dt, hit) {
     consumed = hit(r);
   }
   r.life -= dt;
-  return consumed || r.life <= 0 || r.travelled > WEAPON.range;
+  return consumed || r.life <= 0 || r.travelled > GUN.range;
 }
-
-export { makeRandom, foldAngle };

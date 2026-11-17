@@ -4,7 +4,7 @@
 // is a sine swept by a slow LFO; gunfire is a short noise burst with a fast decay over a low thump;
 // the city is a quiet bed of filtered noise. All of it is built on the WebAudio graph the first
 // time the player clicks or presses a key, because browsers refuse to start a context before a
-// gesture, and the whole bus is muted with M.
+// gesture — and the whole bus is muted with M.
 
 export function makeAudio() {
   let ctx = null;
@@ -18,7 +18,11 @@ export function makeAudio() {
     if (ctx) return ctx;
     const AudioCtor = window.AudioContext || window.webkitAudioContext;
     if (!AudioCtor) return null;
-    ctx = new AudioCtor();
+    try {
+      ctx = new AudioCtor();
+    } catch {
+      return null;
+    }
     master = ctx.createGain();
     master.gain.value = 0.55;
     master.connect(ctx.destination);
@@ -96,7 +100,7 @@ export function makeAudio() {
     if (c && c.state === 'suspended') c.resume();
   }
 
-  /** Called every frame with the player's speed, whether they are driving, and the wanted level. */
+  /** Called every frame with the player's speed, whether they drive, and the wanted level. */
   function frame({ speed = 0, driving = false, stars = 0, near = 1 } = {}) {
     if (!ctx || muted) return;
     const t = ctx.currentTime;

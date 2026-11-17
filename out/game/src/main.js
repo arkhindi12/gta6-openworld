@@ -7,11 +7,11 @@
 //
 // The address bar can stage a picture instead: ?shot=cover|foot|chase|driving (and &seed=N). A
 // staged shot builds the same seeded city, walks the same simulation into pose on a script of
-// inputs and then holds the frame, so the image is the game's own code and not a mock-up.
+// inputs and then holds the frame — so the image is the game's own code and not a mock-up.
 
 import * as THREE from '../vendor/three/three.module.min.js';
-import { buildWorld } from './world.js';
-import { makeCast, makeHero, poseFleet, poseCrowd, poseOfficers, poseHero, poseShots } from './cast.js';
+import { createCity } from './city.js';
+import { buildCast, buildHero, poseFleet, poseCrowd, poseOfficers, poseHero, poseShots } from './actors.js';
 import { createSim, tick, startRun, respawn, restartRun, jobText, STEP } from './sim.js';
 import { drawHud, TITLE } from './hud.js';
 import { attachInput, keyHeld, keyPressed, endFrame, pointerState, moveAxes, onFirstGesture } from './input.js';
@@ -29,9 +29,9 @@ const shotName = params.get('shot');
 const seed = Number(params.get('seed') ?? 1) || 1;
 
 const sim = createSim(seed);
-const world = buildWorld(sceneCanvas, sim.layout);
-const cast = makeCast(world.scene);
-makeHero(cast);
+const city = createCity(sceneCanvas, sim.layout);
+const cast = buildCast(city.scene);
+buildHero(cast);
 const audio = makeAudio();
 
 attachInput(sceneCanvas);
@@ -58,7 +58,7 @@ function fit() {
   sceneCanvas.height = H;
   overlay.width = W;
   overlay.height = H;
-  world.resize(W, H);
+  city.resize(W, H);
   const stage = document.getElementById('stage');
   if (stage) {
     stage.style.width = `${W}px`;
@@ -142,7 +142,7 @@ const ray = new THREE.Vector3();
 function aimGround() {
   const p = sim.player;
   const ptr = pointerState();
-  const camera = world.camera;
+  const camera = city.camera;
   ndc.set((ptr.x / Math.max(1, sceneCanvas.width)) * 2 - 1, -((ptr.y / Math.max(1, sceneCanvas.height)) * 2 - 1), 0.5);
   ray.copy(ndc).unproject(camera).sub(camera.position).normalize();
   const planeY = 1.2;
@@ -169,7 +169,20 @@ function readInput() {
   sim.pointer = pointerState();
   const aim = aimGround();
   const keys = moveAxes();
-  const facing = sim.player.driving ? sim.player.driving.yaw : Math.atan2(cam.lz - cam.z, cam.lx - cam.x);
+  // In a car the wheel and throttle are in the car's own frame: W is always the throttle, whatever
+  // way the nose happens to be pointing. On foot the move vector is mapped through the camera's
+  // ground heading, so "up" is away from the camera and not toward world -z.
+  if (sim.player.driving) {
+    return {
+      move: { x: keys.x, z: keys.z },
+      aim,
+      fire: pointerState().down || keyHeld('j'),
+      use: keyPressed('e'),
+      reload: keyPressed('r'),
+      run: keyHeld('shift'),
+    };
+  }
+  const facing = Math.atan2(cam.lz - cam.z, cam.lx - cam.x);
   const fx = Math.cos(facing);
   const fz = Math.sin(facing);
   return {
@@ -217,12 +230,12 @@ let frames = 0;
 const projected = new THREE.Vector3();
 /** Project a world point into canvas pixels, for the HUD's street marker and the cash floaters. */
 function project(x, y, z) {
-  projected.set(x, y, z).project(world.camera);
+  projected.set(x, y, z).project(city.camera);
   return { x: ((projected.x + 1) / 2) * W, y: ((1 - projected.y) / 2) * H, depth: projected.z };
 }
 
 function render() {
-  const camera = world.camera;
+  const camera = city.camera;
   const shake = sim.shake;
   const jx = shake > 0 ? Math.sin(sim.time * 71) * shake * 0.18 : 0;
   const jy = shake > 0 ? Math.cos(sim.time * 53) * shake * 0.14 : 0;
@@ -231,17 +244,17 @@ function render() {
   camera.updateProjectionMatrix();
   camera.lookAt(cam.lx, cam.ly, cam.lz);
 
-  // The shadow box follows whatever the player is in, snapped so the edges do not crawl.
+  // The shadow box follows whatever the player is in, snapped so its edges do not crawl.
   const focus = sim.player.driving ?? sim.player;
-  world.focusShadow(focus.x, focus.z);
-  world.animate(sim.time);
+  city.focusShadow(focus.x, focus.z);
+  city.animate(sim.time);
 
   poseFleet(cast, sim);
   poseCrowd(cast, sim);
   poseOfficers(cast, sim, camera);
   poseHero(cast, sim);
   poseShots(cast, sim, camera);
-  world.renderer.render(world.scene, camera);
+  city.renderer.render(city.scene, camera);
 
   sim.project = project;
   sim.pointer = pointerState();
@@ -259,6 +272,8 @@ function loop(now) {
   if (sim.mode === 'play' || sim.mode === 'busted' || sim.mode === 'wasted') {
     acc = Math.min(acc + dt, 0.34);
     let steps = 0;
+    // The input is read once per step, not once per frame: a press is consumed by the step it lands
+    // on, so a frame that carries twenty steps cannot press E twenty times.
     while (acc >= STEP && steps < 22) {
       tick(sim, STEP, readInput());
       acc -= STEP;
@@ -311,11 +326,11 @@ if (shotName && SHOT_NAMES.includes(shotName)) {
   }
   // The staged pose is the frame: no simulation step runs between draws, so the camera and the
   // cast stay exactly where stageShot put them.
-  render(1 / 60);
+  render();
   let settled = 0;
   const settle = () => {
     settled += 1;
-    render(1 / 60);
+    render();
     if (settled < 5) {
       requestAnimationFrame(settle);
       return;
@@ -336,19 +351,19 @@ if (shotName && SHOT_NAMES.includes(shotName)) {
 window.__game = {
   THREE,
   sim,
-  world,
+  city,
   cast,
   cam,
   title: TITLE,
   jobText: () => jobText(sim),
   currentJob: () => currentJob(sim.story),
   start: () => startRun(sim),
-  draw: () => render(1 / 60),
+  draw: () => render(),
   step: (n = 1, input = { move: { x: 0, z: 0 }, fire: false, use: false }) => {
     for (let i = 0; i < n; i += 1) tick(sim, STEP, input);
-    render(1 / 60);
+    render();
   },
-  // Simulation only, no draw: the test harness walks the world faster than a frame a step.
+  // Simulation only, no draw: a test harness walks the world faster than a frame a step.
   advance: (n = 1, input = { move: { x: 0, z: 0 }, fire: false, use: false }) => {
     for (let i = 0; i < n; i += 1) tick(sim, STEP, input);
   },

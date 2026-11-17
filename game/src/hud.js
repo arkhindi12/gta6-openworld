@@ -4,13 +4,13 @@
 // parks, sand, the sea, the player's arrow, the police blips, the job blip or an edge arrow when
 // the job is off the map), the wanted stars and their search meter, the wallet, the health bar,
 // the ammo, the job panel with its live condition, the door prompt, the toast, the crosshair, and
-// the four cards (title, paused, busted/wasted, all done).
+// the four cards (title, paused, busted or wasted, all done).
 //
-// The display is drawn at the canvas's own resolution and scaled by CSS, so a 1280x720 screenshot
+// The display is painted at the canvas's own resolution and scaled by CSS, so a 1280x720 screenshot
 // and a 1600x900 laptop see the same layout at the same proportions.
 
-import { LAW } from './tuning.js';
-import { avenues, COAST, HALF_ROAD, districtOf } from './city.js';
+import { LAW } from './settings.js';
+import { avenues, COAST, districtOf } from './layout.js';
 import { JOBS, currentJob } from './missions.js';
 
 export const TITLE = 'VICE MERIDIAN';
@@ -36,35 +36,35 @@ export function drawHud(ctx, sim) {
   ctx.lineJoin = 'round';
 
   if (sim.mode === 'title') {
-    drawTitleCard(ctx, sim, w, h);
+    titleCard(ctx, sim, w, h);
     ctx.restore();
     return;
   }
 
   // The world layer first: the job ring on the street and the damage vignette.
-  drawJobMarker(ctx, sim, w, h);
-  drawVignette(ctx, sim, w, h);
+  jobMarker(ctx, sim, w, h);
+  vignette(ctx, sim, w, h);
 
   // The end cards take the screen: the HUD dims under them rather than competing with the title.
   const ended = sim.mode === 'busted' || sim.mode === 'wasted' || sim.mode === 'complete' || sim.mode === 'paused';
   ctx.save();
   if (ended) ctx.globalAlpha = sim.mode === 'paused' ? 0.35 : 0.18;
 
-  drawMinimap(ctx, sim, 26, 24);
-  drawStars(ctx, sim, w - 30, 30);
-  drawWallet(ctx, sim, w - 30, 78);
-  drawJobPanel(ctx, sim, 26, 296);
-  drawHealth(ctx, sim, 26, h - 74);
-  drawAmmo(ctx, sim, w - 30, h - 74);
-  drawPrompt(ctx, sim, w, h);
-  drawToast(ctx, sim, w, h);
-  drawFloaters(ctx, sim);
-  if (sim.mode === 'play') drawCrosshair(ctx, sim, w, h);
+  minimap(ctx, sim, 26, 24);
+  stars(ctx, sim, w - 30, 30);
+  wallet(ctx, sim, w - 30, 78);
+  jobPanel(ctx, sim, 26, 296);
+  health(ctx, sim, 26, h - 74);
+  ammo(ctx, sim, w - 30, h - 74);
+  prompt(ctx, sim, w, h);
+  toast(ctx, sim, w, h);
+  floaters(ctx, sim);
+  if (sim.mode === 'play') crosshair(ctx, sim, w, h);
   ctx.restore();
 
-  if (sim.mode === 'busted' || sim.mode === 'wasted') drawEndCard(ctx, sim, w, h, sim.mode);
-  if (sim.mode === 'complete') drawDoneCard(ctx, sim, w, h);
-  if (sim.mode === 'paused') drawPauseCard(ctx, sim, w, h);
+  if (sim.mode === 'busted' || sim.mode === 'wasted') endCard(ctx, sim, w, h, sim.mode);
+  if (sim.mode === 'complete') doneCard(ctx, sim, w, h);
+  if (sim.mode === 'paused') pauseCard(ctx, sim, w, h);
   ctx.restore();
 }
 
@@ -103,10 +103,10 @@ const money = (n) => `$${Math.round(n).toLocaleString('en-US')}`;
 
 /**
  * A round map that turns with the player's aim, the way a car's sat-nav does: the arrow is always
- * up and the world rotates under it. Roads, blocks, parks and the water are drawn in map space and
+ * up and the world rotates under it. Roads, blocks, parks and water are drawn in map space and
  * rotated about the centre; the blips are drawn after, unrotated, so a diamond stays a diamond.
  */
-function drawMinimap(ctx, sim, x, y) {
+function minimap(ctx, sim, x, y) {
   const S = MAP_SIZE;
   const r = S / 2;
   const cx = x + r;
@@ -137,21 +137,16 @@ function drawMinimap(ctx, sim, x, y) {
   ctx.fillStyle = '#0b4658';
   ctx.fillRect(cx - r, cy - r, S, S);
   const last = avenues()[avenues().length - 1];
-  const corners = [toMap(-44, -44), toMap(last + 44, -44), toMap(last + 44, last + 44), toMap(-44, last + 44)];
+  const quad = [toMap(-44, -44), toMap(last + 44, -44), toMap(last + 44, last + 44), toMap(-44, last + 44)];
   ctx.beginPath();
-  ctx.moveTo(corners[0].x, corners[0].y);
-  for (let i = 1; i < 4; i += 1) ctx.lineTo(corners[i].x, corners[i].y);
+  ctx.moveTo(quad[0].x, quad[0].y);
+  for (let i = 1; i < 4; i += 1) ctx.lineTo(quad[i].x, quad[i].y);
   ctx.closePath();
   ctx.fillStyle = '#1c1a2a';
   ctx.fill();
 
-  // The promenade and the beach: two pale bands west of the first avenue.
-  const sand = [
-    toMap(COAST.sand, -44),
-    toMap(COAST.promenade, -44),
-    toMap(COAST.promenade, last + 44),
-    toMap(COAST.sand, last + 44),
-  ];
+  // The beach and the promenade: two pale bands west of the first avenue.
+  const sand = [toMap(COAST.sand, -44), toMap(COAST.promenade, -44), toMap(COAST.promenade, last + 44), toMap(COAST.sand, last + 44)];
   ctx.beginPath();
   ctx.moveTo(sand[0].x, sand[0].y);
   for (let i = 1; i < 4; i += 1) ctx.lineTo(sand[i].x, sand[i].y);
@@ -228,7 +223,7 @@ function drawMinimap(ctx, sim, x, y) {
     }
   }
 
-  // Police: a red/blue pair per cruiser, a small pale dot per officer on foot.
+  // Police: a red or blue dot per cruiser, a small pale dot per officer on foot.
   const beat = Math.sin(sim.time * 14) > 0;
   for (const u of sim.police.units) {
     const m = toMap(u.x, u.z);
@@ -305,7 +300,7 @@ function starPath(ctx, cx, cy, r, push) {
   ctx.closePath();
 }
 
-function drawStars(ctx, sim, right, y) {
+function stars(ctx, sim, right, y) {
   const lit = sim.police.stars;
   const size = 21;
   const gap = 3;
@@ -347,7 +342,7 @@ function drawStars(ctx, sim, right, y) {
   ctx.restore();
 }
 
-function drawWallet(ctx, sim, right, y) {
+function wallet(ctx, sim, right, y) {
   ctx.save();
   ctx.textAlign = 'right';
   const text = money(sim.story.cash);
@@ -363,7 +358,7 @@ function drawWallet(ctx, sim, right, y) {
   ctx.restore();
 }
 
-function drawHealth(ctx, sim, x, y) {
+function health(ctx, sim, x, y) {
   const p = sim.player;
   const W = 250;
   ctx.save();
@@ -413,7 +408,7 @@ function drawHealth(ctx, sim, x, y) {
   ctx.restore();
 }
 
-function drawAmmo(ctx, sim, right, y) {
+function ammo(ctx, sim, right, y) {
   const p = sim.player;
   ctx.save();
   ctx.textAlign = 'right';
@@ -444,7 +439,7 @@ function drawAmmo(ctx, sim, right, y) {
 }
 
 /** The job panel: the job's name, its objective line, the distance and the live condition. */
-function drawJobPanel(ctx, sim, x, y) {
+function jobPanel(ctx, sim, x, y) {
   const job = currentJob(sim.story);
   const W = 356;
   const H = job ? 92 : 64;
@@ -475,11 +470,11 @@ function drawJobPanel(ctx, sim, x, y) {
   ctx.fillText(d < 1000 ? `${Math.round(d)} M` : `${(d / 1000).toFixed(1)} KM`, x + W - 12, y + 18);
   ctx.font = `bold 11px ${MONO}`;
   ctx.fillStyle = sim.police.stars > 0 && job.beat === 'escape' ? '#ff6a80' : CYAN;
-  ctx.fillText(liveLine(sim, job), x + W - 12, y + H - 14);
+  ctx.fillText(conditionLine(sim, job), x + W - 12, y + H - 14);
   ctx.restore();
 }
 
-function liveLine(sim, job) {
+function conditionLine(sim, job) {
   const d = Math.round(Math.hypot(job.at.x - sim.player.x, job.at.z - sim.player.z));
   switch (job.beat) {
     case 'reach':
@@ -498,7 +493,7 @@ function liveLine(sim, job) {
 // ---------------------------------------------------------------- the world layer
 
 /** The job's ring on the street, its floating diamond and its name, projected into the frame. */
-function drawJobMarker(ctx, sim, w, h) {
+function jobMarker(ctx, sim, w, h) {
   const job = currentJob(sim.story);
   if (!job || !sim.project) return;
   const at = sim.project(job.at.x, 0.5, job.at.z);
@@ -540,7 +535,7 @@ function drawJobMarker(ctx, sim, w, h) {
   ctx.restore();
 }
 
-function drawVignette(ctx, sim, w, h) {
+function vignette(ctx, sim, w, h) {
   const hurt = Math.max(sim.player.hurt * 0.55, sim.flash * 0.5);
   if (hurt > 0.02) {
     const g = ctx.createRadialGradient(w / 2, h / 2, h * 0.3, w / 2, h / 2, h * 0.78);
@@ -557,7 +552,7 @@ function drawVignette(ctx, sim, w, h) {
   ctx.fillRect(0, 0, w, h);
 }
 
-function drawCrosshair(ctx, sim, w, h) {
+function crosshair(ctx, sim, w, h) {
   const ptr = sim.pointer;
   const x = ptr ? ptr.x : w / 2;
   const y = ptr ? ptr.y : h / 2;
@@ -579,7 +574,7 @@ function drawCrosshair(ctx, sim, w, h) {
   ctx.restore();
 }
 
-function drawPrompt(ctx, sim, w, h) {
+function prompt(ctx, sim, w, h) {
   if (!sim.prompt) return;
   ctx.save();
   ctx.font = `bold 13px ${MONO}`;
@@ -597,9 +592,10 @@ function drawPrompt(ctx, sim, w, h) {
   ctx.restore();
 }
 
-function drawToast(ctx, sim, w, h) {
+function toast(ctx, sim, w, h) {
   const s = sim.story;
   if (s.toastT <= 0 || !s.toast) return;
+  if (sim.mode !== 'play' && sim.mode !== 'title') return;
   ctx.save();
   ctx.globalAlpha = Math.min(1, s.toastT);
   ctx.font = `bold 17px ${SANS}`;
@@ -617,7 +613,7 @@ function drawToast(ctx, sim, w, h) {
 }
 
 /** Cash and job payouts rising off the street where they were earned. */
-function drawFloaters(ctx, sim) {
+function floaters(ctx, sim) {
   if (!sim.floaters.length || !sim.project) return;
   ctx.save();
   ctx.textAlign = 'center';
@@ -636,7 +632,7 @@ function drawFloaters(ctx, sim) {
 
 // ---------------------------------------------------------------- the cards
 
-function drawTitleCard(ctx, sim, w, h) {
+function titleCard(ctx, sim, w, h) {
   const t = sim.time;
   // A wash dark enough to read the title over, light enough to see the city through.
   const wash = ctx.createLinearGradient(0, 0, 0, h);
@@ -732,10 +728,10 @@ function drawTitleCard(ctx, sim, w, h) {
   ctx.restore();
 }
 
-function drawEndCard(ctx, sim, w, h, mode) {
+function endCard(ctx, sim, w, h, mode) {
   const busted = mode === 'busted';
-  // A solid plate behind the words: the street still shows at the edges, but nothing competes
-  // with the title, and the small print stays legible over a lit window.
+  // A solid plate behind the words: the street still shows at the edges, but nothing competes with
+  // the title and the small print stays legible over a lit window.
   const grad = ctx.createLinearGradient(0, h * 0.2, 0, h * 0.62);
   grad.addColorStop(0, 'rgba(8,5,16,0)');
   grad.addColorStop(0.18, 'rgba(8,5,16,0.86)');
@@ -778,7 +774,7 @@ function drawEndCard(ctx, sim, w, h, mode) {
   ctx.restore();
 }
 
-function drawDoneCard(ctx, sim, w, h) {
+function doneCard(ctx, sim, w, h) {
   ctx.fillStyle = 'rgba(8,5,16,0.62)';
   ctx.fillRect(0, 0, w, h);
   ctx.save();
@@ -799,7 +795,7 @@ function drawDoneCard(ctx, sim, w, h) {
   ctx.restore();
 }
 
-function drawPauseCard(ctx, sim, w, h) {
+function pauseCard(ctx, sim, w, h) {
   ctx.fillStyle = 'rgba(8,5,16,0.58)';
   ctx.fillRect(0, 0, w, h);
   ctx.save();
@@ -815,4 +811,4 @@ function drawPauseCard(ctx, sim, w, h) {
   ctx.restore();
 }
 
-export { MAP_SIZE, MAP_SPAN, HALF_ROAD };
+export { MAP_SIZE, MAP_SPAN };

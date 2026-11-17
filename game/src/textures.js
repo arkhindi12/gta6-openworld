@@ -1,24 +1,24 @@
 // Every surface texture in the game, painted with Canvas 2D the first time it is asked for and
-// cached by name. Nothing is downloaded: the asphalt is noise, the windows are a grid, and the
-// palm crowns are eleven quadratic curves.
+// then cached by name. Nothing is downloaded: the asphalt is noise, the windows are a grid, and a
+// palm crown is eleven quadratic curves.
 //
-// Each painter takes a seed so the same seed draws the same speck of aggregate in the same
-// place; a texture is never a source of visual drift between two runs.
+// Each painter takes a fixed seed so the same speck of aggregate lands in the same place on every
+// load, and a texture is never a source of drift between two runs.
 
 import * as THREE from '../vendor/three/three.module.min.js';
-import { makeRandom } from './rng.js';
-import { PALETTE } from './tuning.js';
+import { rngFrom } from './random.js';
+import { PALETTE } from './settings.js';
 
 const cache = new Map();
 
-function canvas(w, h) {
+function sheet(w, h) {
   const c = document.createElement('canvas');
   c.width = w;
   c.height = h;
   return c;
 }
 
-function toTexture(c, { srgb = true, repeat = null, clamp = false } = {}) {
+function texture(c, { srgb = true, repeat = null, clamp = false } = {}) {
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
   tex.wrapS = tex.wrapT = clamp ? THREE.ClampToEdgeWrapping : THREE.RepeatWrapping;
@@ -28,7 +28,7 @@ function toTexture(c, { srgb = true, repeat = null, clamp = false } = {}) {
   return tex;
 }
 
-function cached(key, paint) {
+function once(key, paint) {
   let tex = cache.get(key);
   if (!tex) {
     tex = paint();
@@ -39,12 +39,12 @@ function cached(key, paint) {
 
 // ---------------------------------------------------------------- ground
 
-/** Dark aggregate with faint wheel-polish bands, over one 20 m square. */
+/** Dark aggregate with faint wheel-polish bands, over a 20 m square. */
 export function asphaltTexture() {
-  return cached('asphalt', () => {
-    const c = canvas(512, 512);
+  return once('asphalt', () => {
+    const c = sheet(512, 512);
     const g = c.getContext('2d');
-    const r = makeRandom(41);
+    const r = rngFrom(41);
     g.fillStyle = PALETTE.asphalt;
     g.fillRect(0, 0, 512, 512);
     for (let i = 0; i < 7000; i += 1) {
@@ -61,16 +61,16 @@ export function asphaltTexture() {
       g.ellipse(r() * 512, r() * 512, 20 + r() * 60, 12 + r() * 40, r() * 3, 0, Math.PI * 2);
       g.fill();
     }
-    return toTexture(c);
+    return texture(c);
   });
 }
 
 /** Warm concrete pavers, 8 m to a repeat. */
 export function pavingTexture() {
-  return cached('paving', () => {
-    const c = canvas(512, 512);
+  return once('paving', () => {
+    const c = sheet(512, 512);
     const g = c.getContext('2d');
-    const r = makeRandom(77);
+    const r = rngFrom(77);
     g.fillStyle = PALETTE.pave;
     g.fillRect(0, 0, 512, 512);
     const tile = 64;
@@ -95,16 +95,16 @@ export function pavingTexture() {
       g.fillStyle = `rgba(80,60,50,${(0.03 + r() * 0.08).toFixed(3)})`;
       g.fillRect(r() * 512, r() * 512, 2 + r() * 10, 2 + r() * 10);
     }
-    return toTexture(c);
+    return texture(c);
   });
 }
 
 /** Pale beach sand with shell grit and wind ripples. */
 export function sandTexture() {
-  return cached('sand', () => {
-    const c = canvas(256, 256);
+  return once('sand', () => {
+    const c = sheet(256, 256);
     const g = c.getContext('2d');
-    const r = makeRandom(9);
+    const r = rngFrom(9);
     g.fillStyle = PALETTE.sand;
     g.fillRect(0, 0, 256, 256);
     for (let i = 0; i < 4200; i += 1) {
@@ -119,16 +119,16 @@ export function sandTexture() {
       for (let x = 0; x < 256; x += 16) g.lineTo(x, y + Math.sin(x * 0.05 + i) * 3);
       g.stroke();
     }
-    return toTexture(c);
+    return texture(c);
   });
 }
 
 /** Mown park lawn with a few flowers. */
 export function lawnTexture() {
-  return cached('lawn', () => {
-    const c = canvas(256, 256);
+  return once('lawn', () => {
+    const c = sheet(256, 256);
     const g = c.getContext('2d');
-    const r = makeRandom(31);
+    const r = rngFrom(31);
     g.fillStyle = PALETTE.verge;
     g.fillRect(0, 0, 256, 256);
     for (let x = 0; x < 256; x += 32) {
@@ -145,7 +145,7 @@ export function lawnTexture() {
       g.arc(r() * 256, r() * 256, 1.4, 0, Math.PI * 2);
       g.fill();
     }
-    return toTexture(c);
+    return texture(c);
   });
 }
 
@@ -153,15 +153,14 @@ export function lawnTexture() {
 
 /**
  * One 256 px tile of curtain wall: four windows by two floors. A lit pane is a warm or cool
- * vertical gradient, a dark pane is glass reflecting night; both get a frame and a sky glint,
+ * vertical gradient, a dark pane is night glass reflecting the sky; both get a frame and a glint,
  * which is what stops a wall of windows reading as a checkerboard.
  */
 export function facadeTexture(wall, seed, lit) {
-  const key = `facade:${wall}:${seed}:${lit}`;
-  return cached(key, () => {
-    const r = makeRandom(seed + 13);
+  return once(`facade:${wall}:${seed}:${lit}`, () => {
+    const r = rngFrom(seed + 13);
     const S = 256;
-    const c = canvas(S, S);
+    const c = sheet(S, S);
     const g = c.getContext('2d');
     g.fillStyle = wall;
     g.fillRect(0, 0, S, S);
@@ -208,15 +207,15 @@ export function facadeTexture(wall, seed, lit) {
     g.fillRect(0, ch - 8, S, 3);
     g.fillStyle = 'rgba(0,0,0,0.22)';
     g.fillRect(0, ch + 4, S, 4);
-    return toTexture(c);
+    return texture(c);
   });
 }
 
 /** A shopfront band: a bright interior with silhouetted figures and a shelf of colour. */
 export function shopfrontTexture(seed) {
-  return cached(`shop:${seed}`, () => {
-    const r = makeRandom(seed + 5);
-    const c = canvas(256, 128);
+  return once(`shop:${seed}`, () => {
+    const r = rngFrom(seed + 5);
+    const c = sheet(256, 128);
     const g = c.getContext('2d');
     g.fillStyle = '#1a1020';
     g.fillRect(0, 0, 256, 128);
@@ -238,15 +237,15 @@ export function shopfrontTexture(seed) {
       g.lineTo(i * 64, 128);
       g.stroke();
     }
-    return toTexture(c);
+    return texture(c);
   });
 }
 
-/** A neon sign board: a dark panel, a glowing border and two abstract tube strokes. */
+/** A neon sign board: a dark panel, a glowing border and two or three abstract tube strokes. */
 export function neonTexture(colour, seed) {
-  return cached(`neon:${colour}:${seed}`, () => {
-    const r = makeRandom(seed + 3);
-    const c = canvas(128, 64);
+  return once(`neon:${colour}:${seed}`, () => {
+    const r = rngFrom(seed + 3);
+    const c = sheet(128, 64);
     const g = c.getContext('2d');
     g.fillStyle = '#120a1c';
     g.fillRect(0, 0, 128, 64);
@@ -266,7 +265,7 @@ export function neonTexture(colour, seed) {
       g.stroke();
     }
     g.shadowBlur = 0;
-    return toTexture(c, { srgb: false });
+    return texture(c, { srgb: false });
   });
 }
 
@@ -274,10 +273,10 @@ export function neonTexture(colour, seed) {
 
 /** A palm crown from above: eleven drooping fronds cut out of transparency. */
 export function palmTexture() {
-  return cached('palm', () => {
-    const c = canvas(256, 256);
+  return once('palm', () => {
+    const c = sheet(256, 256);
     const g = c.getContext('2d');
-    const r = makeRandom(404);
+    const r = rngFrom(404);
     for (let i = 0; i < 11; i += 1) {
       const a = (i / 11) * Math.PI * 2 + r() * 0.2;
       const len = 100 + r() * 18;
@@ -307,28 +306,28 @@ export function palmTexture() {
     g.beginPath();
     g.arc(128, 128, 12, 0, Math.PI * 2);
     g.fill();
-    return toTexture(c);
+    return texture(c);
   });
 }
 
-/** A soft round blob, white so it can be tinted by the material colour. */
+/** A soft round blob, so it can be tinted by a material colour. */
 export function glowTexture(colour = '#ffffff') {
-  return cached(`glow:${colour}`, () => {
-    const c = canvas(128, 128);
+  return once(`glow:${colour}`, () => {
+    const c = sheet(128, 128);
     const g = c.getContext('2d');
     const grad = g.createRadialGradient(64, 64, 2, 64, 64, 64);
     grad.addColorStop(0, colour);
     grad.addColorStop(1, 'rgba(0,0,0,0)');
     g.fillStyle = grad;
     g.fillRect(0, 0, 128, 128);
-    return toTexture(c, { srgb: false });
+    return texture(c, { srgb: false });
   });
 }
 
 /** The sky: a Miami evening, purple overhead falling through coral to gold at the water. */
 export function skyTexture() {
-  return cached('sky', () => {
-    const c = canvas(8, 512);
+  return once('sky', () => {
+    const c = sheet(8, 512);
     const g = c.getContext('2d');
     const grad = g.createLinearGradient(0, 0, 0, 512);
     grad.addColorStop(0.0, '#20527f');
@@ -340,14 +339,14 @@ export function skyTexture() {
     grad.addColorStop(1.0, '#ffe0a8');
     g.fillStyle = grad;
     g.fillRect(0, 0, 8, 512);
-    return toTexture(c, { clamp: true });
+    return texture(c, { clamp: true });
   });
 }
 
-/** The sun as a billboard: a disc with a wide warm halo. */
+/** The sun as a billboard: a disc inside a wide warm halo. */
 export function sunTexture() {
-  return cached('sun', () => {
-    const c = canvas(256, 256);
+  return once('sun', () => {
+    const c = sheet(256, 256);
     const g = c.getContext('2d');
     const grad = g.createRadialGradient(128, 128, 8, 128, 128, 128);
     grad.addColorStop(0, 'rgba(255,247,214,1)');
@@ -357,16 +356,16 @@ export function sunTexture() {
     grad.addColorStop(1, 'rgba(255,100,120,0)');
     g.fillStyle = grad;
     g.fillRect(0, 0, 256, 256);
-    return toTexture(c, { srgb: false });
+    return texture(c, { srgb: false });
   });
 }
 
 /** Long thin wave crests for the bay, tiled across the water. */
 export function rippleTexture() {
-  return cached('ripple', () => {
-    const c = canvas(256, 256);
+  return once('ripple', () => {
+    const c = sheet(256, 256);
     const g = c.getContext('2d');
-    const r = makeRandom(88);
+    const r = rngFrom(88);
     g.clearRect(0, 0, 256, 256);
     for (let i = 0; i < 140; i += 1) {
       const y = r() * 256;
@@ -379,6 +378,6 @@ export function rippleTexture() {
       g.quadraticCurveTo(x + w * 0.5, y - 2, x + w, y);
       g.stroke();
     }
-    return toTexture(c, { srgb: false });
+    return texture(c, { srgb: false });
   });
 }

@@ -1,62 +1,56 @@
 // A geometry accumulator: many boxes and quads, one buffer, one draw call.
 //
-// A city block of 40 boxes per building over 130 buildings is 5,000 boxes; as individual meshes
-// that is 5,000 draw calls and the browser will not hold 60 fps. Everything that shares a
-// material is therefore pushed into one of these and finished with `toMesh()`, which returns a
-// single BufferGeometry positioned in world space. UVs are scaled by metres rather than
-// normalised, so a texture tiles at a constant size across a 9 m shopfront and a 90 m tower.
+// A block of forty boxes per building over a hundred and thirty buildings is five thousand boxes.
+// As individual meshes that is five thousand draw calls and no browser holds 60 fps; so everything
+// that shares a material is pushed into one of these and finished with toMesh(), which hands back a
+// single BufferGeometry with the world transform baked in.
 //
-// Faces are emitted with an explicit normal rather than derived: an interior face never gets
-// drawn, and the winding order matches the normal so backface culling stays on.
+// UVs are in metres rather than normalised, so a texture tiles at a constant size across a 9 m
+// shopfront and a 90 m tower. Faces carry an explicit normal, and the winding matches it, so
+// backface culling stays on and an interior face is never drawn.
 
 import * as THREE from '../vendor/three/three.module.min.js';
 
 const TAU = Math.PI * 2;
 
-export class MeshBuilder {
+export class Batch {
   constructor(material, opts = {}) {
     this.material = material;
     this.castShadow = opts.castShadow ?? true;
     this.receiveShadow = opts.receiveShadow ?? true;
-    this.position = [];
-    this.normal = [];
-    this.uv = [];
-    this.colour = [];
-    this.index = [];
+    this.pos = [];
+    this.nor = [];
+    this.uvs = [];
+    this.cols = [];
+    this.idx = [];
   }
 
-  /** How many vertices have been written so far. */
-  get vertexCount() {
-    return this.position.length / 3;
+  get count() {
+    return this.pos.length / 3;
   }
 
-  /**
-   * A quad from four corners in world space, listed counter-clockwise as seen from the front.
-   * `uvs` is optional; without it the UVs are derived from the corner distances so the texture
-   * keeps its metre scale.
-   */
-  quad(a, b, c, d, uvs = null, normal = null, colour = null) {
-    const base = this.vertexCount;
+  /** A quad from four corners in world space, counter-clockwise seen from the front. */
+  quad(a, b, c, d, uv = null, normal = null, colour = null) {
+    const base = this.count;
     const n = normal ?? normalOf(a, b, c);
     for (const corner of [a, b, c, d]) {
-      this.position.push(corner[0], corner[1], corner[2]);
-      this.normal.push(n[0], n[1], n[2]);
-      if (colour) this.colour.push(colour[0], colour[1], colour[2]);
+      this.pos.push(corner[0], corner[1], corner[2]);
+      this.nor.push(n[0], n[1], n[2]);
+      if (colour) this.cols.push(colour[0], colour[1], colour[2]);
     }
-    if (uvs) {
-      for (const t of uvs) this.uv.push(t[0], t[1]);
+    if (uv) {
+      for (const t of uv) this.uvs.push(t[0], t[1]);
     } else {
       const u = span(a, b);
       const v = span(a, d);
-      this.uv.push(0, 0, u, 0, u, v, 0, v);
+      this.uvs.push(0, 0, u, 0, u, v, 0, v);
     }
-    this.index.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    this.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
   }
 
   /**
-   * An axis-aligned box standing on `y`, `w` by `h` by `d` centred on (x, z). `tile` is the size
-   * in metres of one texture repeat, used for the four sides; the top gets its own repeat so a
-   * roof does not smear. `sides` can restrict which walls are emitted ('ns' or 'ew').
+   * An axis-aligned box standing on `y`, `w` by `h` by `d`, centred on (x, z). `tile` is the size
+   * in metres of one texture repeat; the top gets its own repeat so a roof does not smear.
    */
   box(x, y, z, w, h, d, opts = {}) {
     const tileU = opts.tile?.[0] ?? 8;
@@ -79,8 +73,7 @@ export class MeshBuilder {
     if (want.includes('e')) this.quad([x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1], face(d, h), [1, 0, 0], colour);
     if (want.includes('w')) this.quad([x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0], face(d, h), [-1, 0, 0], colour);
     if (opts.noTop !== true) {
-      const topColour = opts.topColour ?? colour;
-      this.quad([x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0], face(w, d), [0, 1, 0], topColour);
+      this.quad([x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0], face(w, d), [0, 1, 0], opts.topColour ?? colour);
     }
   }
 
@@ -114,8 +107,10 @@ export class MeshBuilder {
     const at = (dx, dy, dz) => [cx + dx * c - dz * s, y + dy, cz + dx * s + dz * c];
     const hw = w / 2;
     const hd = d / 2;
-    const uvW = [[0, 0], [Math.max(1, w / tile[0]), 0], [Math.max(1, w / tile[0]), Math.max(1, h / tile[1])], [0, Math.max(1, h / tile[1])]];
-    const uvD = [[0, 0], [Math.max(1, d / tile[0]), 0], [Math.max(1, d / tile[0]), Math.max(1, h / tile[1])], [0, Math.max(1, h / tile[1])]];
+    const nu = Math.max(1, w / tile[0]);
+    const nv = Math.max(1, h / tile[1]);
+    const uvW = [[0, 0], [nu, 0], [nu, nv], [0, nv]];
+    const uvD = [[0, 0], [Math.max(1, d / tile[0]), 0], [Math.max(1, d / tile[0]), nv], [0, nv]];
     const nAt = (nx, nz) => [nx * c - nz * s, 0, nx * s + nz * c];
     this.quad(at(-hw, 0, hd), at(hw, 0, hd), at(hw, h, hd), at(-hw, h, hd), uvW, nAt(0, 1), colour);
     this.quad(at(hw, 0, -hd), at(-hw, 0, -hd), at(-hw, h, -hd), at(hw, h, -hd), uvW, nAt(0, -1), colour);
@@ -151,14 +146,14 @@ export class MeshBuilder {
     return mesh;
   }
 
-  /** Finish the buffer alone, for a caller that brings its own mesh (a per-instance material). */
+  /** Finish the buffer alone, for a caller that brings its own mesh. */
   toGeometry() {
     const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(this.position, 3));
-    g.setAttribute('normal', new THREE.Float32BufferAttribute(this.normal, 3));
-    g.setAttribute('uv', new THREE.Float32BufferAttribute(this.uv, 2));
-    if (this.colour.length) g.setAttribute('color', new THREE.Float32BufferAttribute(this.colour, 3));
-    g.setIndex(this.index);
+    g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(this.nor, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(this.uvs, 2));
+    if (this.cols.length) g.setAttribute('color', new THREE.Float32BufferAttribute(this.cols, 3));
+    g.setIndex(this.idx);
     g.computeBoundingSphere();
     return g;
   }
@@ -175,10 +170,7 @@ function normalOf(a, b, c) {
   let ny = uz * vx - ux * vz;
   let nz = ux * vy - uy * vx;
   const len = Math.hypot(nx, ny, nz) || 1;
-  nx /= len;
-  ny /= len;
-  nz /= len;
-  return [nx, ny, nz];
+  return [nx / len, ny / len, nz / len];
 }
 
 function span(a, b) {

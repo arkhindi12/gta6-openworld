@@ -1,9 +1,9 @@
 // The simulation: one object holding the player, the traffic, the crowd, the police and the job
-// chain, and one `tick` that advances all of them in the right order.
+// chain, and one tick that advances all of them in the right order.
 //
-// The live game, a paused frame and a staged screenshot all come through here. `tick` takes the
-// input as plain data so a screenshot can hand the world a script and land in a known pose; it
-// knows nothing about meshes, cameras or pixels.
+// The live game, a paused frame and a staged screenshot all come through here. tick takes the input
+// as plain data, so a screenshot can hand the world a script and land in a known pose; it knows
+// nothing about meshes, cameras or pixels.
 //
 // The order matters and is deliberate:
 //   1. the player's own clocks and reload
@@ -13,10 +13,10 @@
 //   5. the police's rounds, resolved against the player
 //   6. the job chain, and the arrest or death check that can end the run
 
-import { LAW, WEAPON, MAP } from './tuning.js';
-import { CityLayout, avenues, HALF_ROAD } from './city.js';
-import { makeRandom } from './rng.js';
-import { seedTraffic, driveTraffic, carInLane, newCar, DIRECTIONS, LANE } from './traffic.js';
+import { GUN } from './settings.js';
+import { CityLayout } from './layout.js';
+import { rngFrom } from './random.js';
+import { seedTraffic, driveTraffic, carInLane } from './traffic.js';
 import { seedCrowd, walkCrowd, scatterCrowd, personAt, fellAt, bodyAhead, newPerson } from './crowd.js';
 import { newPolice, runPolice, raiseHeat, standDown, hitOfficer, arrestAt } from './police.js';
 import { newStory, currentJob, testJob, announce, liveCondition, JOBS } from './missions.js';
@@ -33,15 +33,14 @@ import {
   HOME,
 } from './player.js';
 
-const STEP = 1 / 60;
+export const STEP = 1 / 60;
 
 /** Build a world for a seed: layout, cast, story, and the dressing the first two jobs need. */
 export function createSim(seed = 1) {
-  const layout = new CityLayout(seed);
   const sim = {
     seed,
-    layout,
-    rand: makeRandom(seed * 3 + 9),
+    layout: new CityLayout(seed),
+    rand: rngFrom(seed * 3 + 9),
     time: 0,
     mode: 'title', // title | play | paused | busted | wasted | complete
     player: newPlayer(),
@@ -58,10 +57,9 @@ export function createSim(seed = 1) {
     crewDown: 0,
     pointer: { x: 0, y: 0 },
     project: null,
+    viewYaw: 0,
     endReason: '',
-    staged: null,
-    events: { onShot: null, onCopShot: null, onCash: null, onReload: null, onImpact: null },
-    // A crime the scene should react to: heat, and a crowd that scatters.
+    events: { onShot: null, onCopShot: null, onCash: null, onReload: null, onImpact: null, onSave: null },
     onCrime: null,
   };
   sim.onCrime = (kind, at) => commitCrime(sim, kind, at);
@@ -74,7 +72,7 @@ export function createSim(seed = 1) {
 /**
  * The world changes as the chain moves: job 2 parks a pink drop-top on Sunglass Strip for the
  * player to take, and job 3 puts a crew of three on the marina forecourt. Both are placed from the
- * job's own record so the marker and the thing inside it never disagree.
+ * job's own record, so the marker and the thing inside it never disagree.
  */
 function dressForJob(sim) {
   const job = currentJob(sim.story);
@@ -167,7 +165,7 @@ export function tick(sim, dt, input) {
   p.recoil = Math.max(0, p.recoil - dt * 4);
   p.hurt = Math.max(0, p.hurt - dt * 0.9);
   p.cool = Math.max(0, p.cool - dt);
-  tickReloadState(sim, dt);
+  tickReload(sim, dt);
 
   if (sim.mode === 'play') {
     if (input.use) toggleVehicle(sim);
@@ -184,24 +182,28 @@ export function tick(sim, dt, input) {
       sim.mode = 'wasted';
       sim.endReason = 'wasted';
       sim.shake = 1.2;
+      sim.story.toastT = 0;
+      sim.story.toast = '';
     } else if (!p.driving && arrestAt(sim.police, p.x, p.z)) {
       sim.mode = 'busted';
       sim.endReason = 'busted';
       sim.police.busted += 1;
       standDown(sim.police);
+      sim.story.toastT = 0;
+      sim.story.toast = '';
     }
   }
   updatePrompt(sim);
 }
 
-// The reload clock is the only part of the weapon the sim has to run itself, because a reload can
-// finish while the world is paused on a card.
-function tickReloadState(sim, dt) {
+// The reload clock is the only part of the weapon the sim runs itself, because a reload can finish
+// while the world is paused on a card.
+function tickReload(sim, dt) {
   const p = sim.player;
   if (p.reload <= 0) return;
   p.reload -= dt;
   if (p.reload > 0) return;
-  const take = Math.min(WEAPON.clip - p.clip, p.ammo);
+  const take = Math.min(GUN.clip - p.clip, p.ammo);
   p.clip += take;
   p.ammo -= take;
   if (take > 0) sim.events.onReload?.();
@@ -297,7 +299,7 @@ function bankJob(sim, job) {
   sim.events.onCash?.(job.reward);
   const p = sim.player;
   sim.floaters.push({ x: p.x, z: p.z, y: 2.2, life: 2.4, text: `+$${job.reward}`, colour: '#7dffcf' });
-  saveStory(sim);
+  sim.events.onSave?.(sim.story);
   dressForJob(sim);
 }
 
@@ -382,7 +384,7 @@ export function respawn(sim) {
   sim.story.cash = Math.max(0, Math.floor(sim.story.cash * 0.9));
   p.hp = p.hpMax;
   p.armour = 0;
-  p.clip = WEAPON.clip;
+  p.clip = GUN.clip;
   p.ammo = Math.max(p.ammo, 34);
   p.hurt = 0;
   p.reload = 0;
@@ -403,7 +405,7 @@ export function respawn(sim) {
   }
   sim.mode = 'play';
   announce(sim.story, 'YOU WOKE UP ON THE PROMENADE  ·  THE JOB IS STILL WAITING', 4);
-  saveStory(sim);
+  sim.events.onSave?.(sim.story);
 }
 
 /** A whole new run: a fresh story, the fleet back in the traffic's hands, the player at home. */
@@ -424,8 +426,4 @@ export function restartRun(sim) {
   dressForJob(sim);
 }
 
-function saveStory(sim) {
-  sim.events.onSave?.(sim.story);
-}
-
-export { STEP, LAW, MAP, avenues, HALF_ROAD, LANE, DIRECTIONS, newCar, carInLane };
+export { JOBS };

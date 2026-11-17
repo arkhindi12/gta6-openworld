@@ -95,9 +95,9 @@ export function announce(story, text, seconds = 3.2) {
 }
 
 /**
- * Test the current job against the world and bank it if it passed. `ctx` carries the player, how
- * many of the crew are down inside the marker, and the wanted level. Returns the job that was
- * passed on this call, or null.
+ * Test the current job against the world and bank it if it passed. `ctx` carries how many of the
+ * crew are down inside the marker and the wanted level. Returns the job that was passed on this
+ * call, or null.
  */
 export function testJob(story, dt, player, ctx) {
   story.toastT = Math.max(0, story.toastT - dt);
@@ -141,7 +141,7 @@ export function testJob(story, dt, player, ctx) {
 
 /**
  * The short line under the objective: what the player has to do right now, in the HUD's voice.
- * This is the only place the live condition of a job is spelled out.
+ * This is the only place a job's live condition is spelled out.
  */
 export function liveCondition(job, player, ctx) {
   if (!job) return '';

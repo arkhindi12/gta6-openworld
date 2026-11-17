@@ -2,18 +2,17 @@
 //
 // ?shot=cover|foot|chase|driving builds the same seeded city the player gets, puts the cast where
 // the picture needs them and parks the camera. Nothing here draws: main.js renders the result
-// through the same render() the game uses, HUD and all, and then freezes the frame so the picture
-// is exactly what was staged.
+// through the same render() the game uses, HUD and all, and then holds the frame so the picture is
+// exactly what was staged.
 //
 // Placement is always "this avenue, this heading, this far along", never a raw x/z: the traffic
 // module owns the lane offset, so a staged car sits in a real lane and the queue behind it brakes
-// for it. The avenues sit on multiples of 264 m, kerbs 24 m either side of a centre line, and the
-// lanes 5.4 m to the right of it.
+// for it. The avenues sit on multiples of 264 m, their kerbs 24 m either side of a centre line,
+// and the lanes 5.4 m to the right of it.
 
 import { carInLane, newCar, LANE } from './traffic.js';
 import { newPerson } from './crowd.js';
 import { newStory } from './missions.js';
-import { HOME } from './player.js';
 
 const NEUTRAL = { move: { x: 0, z: 0 }, fire: false, use: false, run: false, reload: false };
 
@@ -78,6 +77,7 @@ function unitAt(sim, x, z, yaw, deployed = true) {
       moving: 0,
       inCar: !deployed,
       flash: 0,
+      collar: i === 0,
     });
   }
   sim.police.units.push(unit);
@@ -163,8 +163,8 @@ function stageFoot(sim) {
   p.running = 0;
 
   sim.traffic.length = 0;
-  // Northbound, coming at the camera in the near lane, queued behind the coupe; southbound
-  // beyond the centre line; a pair of cars crossing on the side street.
+  // Northbound, coming at the camera in the near lane, queued behind the coupe; southbound beyond
+  // the centre line; a pair of cars crossing on the side street.
   carOn(sim, 'sedan', SHOT_AVENUE, 1104, NORTH, '#22e6d0', 9);
   carOn(sim, 'cab', SHOT_AVENUE, 1060, NORTH, '#ffcc33', 8);
   carOn(sim, 'coupe', SHOT_AVENUE, 1002, NORTH, '#8f5bff', 11);
@@ -199,8 +199,8 @@ function stageFoot(sim) {
   const down = pedAt(sim, PAVE_E - 2.2, 1070, 0.4, { shirt: '#26324a', skin: '#e8b98c' });
   down.down = 4;
 
-  // Over the right shoulder, a touch above head height: the player sits low and left of centre,
-  // the avenue recedes to the vanishing point, the palm rank frames the left edge.
+  // Over the right shoulder, a touch above head height: the player sits low and left of centre, the
+  // avenue recedes to the vanishing point, the palm rank frames the left edge.
   return {
     camera: { x: p.x + 1.8, y: 3.3, z: p.z + 5.4, lx: p.x + 2.2, ly: 1.5, lz: p.z - 18, fov: 58 },
     input: () => ({ ...NEUTRAL, aim: { x: SHOT_AVENUE + 40, z: 900 } }),
@@ -237,8 +237,8 @@ function stageChase(sim) {
   sim.police.seen = true;
   sim.police.units.length = 0;
   // Close enough that the bars, the livery and the officers' pistols all read: the nearest cruiser
-  // is fourteen metres up the road and its crew is out in the lane. Two cruisers, four officers -
-  // one crew on the near side of the avenue, one on the far, which is what the picture wants.
+  // is fourteen metres up the road and its crew is out in the lane. Two cruisers, four officers —
+  // one crew on the near side of the avenue, one on the far.
   const a = unitAt(sim, laneX(NORTH) - 4.2, 1002, Math.PI / 2 + 0.42, true);
   const b = unitAt(sim, SHOT_AVENUE + 6.8, 996, Math.PI / 2 - 0.7, true);
   const spread = [
@@ -355,4 +355,3 @@ function stageDriving(sim) {
 }
 
 export const SHOT_NAMES = ['cover', 'foot', 'chase', 'driving'];
-export { HOME };

@@ -14,6 +14,13 @@ const SWALLOW = new Set(['w', 'a', 's', 'd', 'e', 'r', 'm', 'p', 'shift', ' ', '
 
 const normalise = (e) => (e.key === ' ' ? ' ' : e.key.toLowerCase());
 
+let gesture = null;
+
+/** Register the one-shot "the user interacted" callback, used to start audio. */
+export function onFirstGesture(fn) {
+  gesture = fn;
+}
+
 /** Bind the keyboard and pointer to a canvas. Safe to call once per page. */
 export function attachInput(canvas) {
   window.addEventListener('keydown', (e) => {
@@ -21,6 +28,7 @@ export function attachInput(canvas) {
     if (SWALLOW.has(k)) e.preventDefault();
     if (!held.has(k)) pressed.add(k);
     held.add(k);
+    gesture?.();
   });
   window.addEventListener('keyup', (e) => {
     held.delete(normalise(e));
@@ -47,6 +55,7 @@ export function attachInput(canvas) {
       pressed.add('fire');
     }
     if (e.button === 2) pressed.add('alt');
+    gesture?.();
   });
   window.addEventListener('pointerup', (e) => {
     if (e.button === 0) pointer.down = false;
@@ -55,15 +64,6 @@ export function attachInput(canvas) {
   canvas.addEventListener('pointerleave', () => {
     pointer.inside = false;
   });
-  // A tap on the canvas is the gesture that lets the audio context start.
-  canvas.addEventListener('pointerdown', () => onGesture?.());
-  window.addEventListener('keydown', () => onGesture?.());
-}
-
-let onGesture = null;
-/** Register the one-shot "the user interacted" callback, used to start audio. */
-export function onFirstGesture(fn) {
-  onGesture = fn;
 }
 
 /** True while any of these keys is down. */
@@ -94,7 +94,7 @@ export function pointerState() {
 }
 
 /**
- * WASD as a screen-space vector: x right, z down, magnitude capped at one. The caller maps this
+ * WASD as a screen-space vector: x right, z down, magnitude capped at one. The caller maps it
  * through the camera onto the ground.
  */
 export function moveAxes() {

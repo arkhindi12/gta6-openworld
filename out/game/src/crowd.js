@@ -2,18 +2,18 @@
 //
 // A person is a small record: a spot, a direction, a stride phase, a mood. They walk the strip
 // between the kerb and a building's setback, turn at the corners when the wander wants them to,
-// and never walk into a wall - if the next step is into one, they turn.
+// and never walk into a wall — if the next step is into one, they turn.
 //
-// A shot within earshot turns everybody round and sends them running away from it, and the sight
-// of a body does the same to anyone close enough to see one. A round that lands on a body drops
-// it, and the fall is permanent for the length of a life: the record stays where it fell with
-// `down` counting the seconds since, which is what the renderer uses to lay it out.
+// A shot within earshot turns everybody round and sends them running away from it, and the sight of
+// a body does the same to anyone close enough to see one. A round that lands on a body drops it,
+// and the fall is permanent for the length of a life: the record stays where it fell with `down`
+// counting the seconds since, which is what the renderer uses to lay it out.
 //
-// Nothing here knows what a mesh is. The renderer reads x, z, yaw, phase, moving, down.
+// Nothing here knows what a mesh is. The renderer reads x, z, yaw, phase, moving, run, down.
 
-import { CROWD, PALETTE } from './tuning.js';
-import { avenues, COAST, districtOf } from './city.js';
-import { makeRandom, foldAngle } from './rng.js';
+import { CROWD, PALETTE } from './settings.js';
+import { avenues, COAST, districtOf } from './layout.js';
+import { rngFrom, wrap } from './random.js';
 
 // The pavement strip runs from just outside the kerb to a building's setback.
 const KERB = 24 + 1.6;
@@ -44,7 +44,7 @@ export function newPerson(rand, x, z, yaw = 0, extra = {}) {
 
 /** The seeded crowd: spread along both sides of every avenue. */
 export function seedCrowd(seed = 5) {
-  const rand = makeRandom(seed * 7 + 2);
+  const rand = rngFrom(seed);
   const lines = avenues();
   const last = lines[lines.length - 1];
   const people = [];
@@ -59,7 +59,6 @@ export function seedCrowd(seed = 5) {
     const x = alongX ? along : line + side * off;
     const z = alongX ? line + side * off : along;
     if (x < COAST.shore + 2 || z > COAST.bay - 2) continue;
-    // Nobody starts inside a building: the strip is not always clear at a corner.
     const alongDir = rand.chance() ? 1 : -1;
     const yaw = alongX ? (alongDir > 0 ? 0 : Math.PI) : alongDir > 0 ? Math.PI / 2 : -Math.PI / 2;
     people.push(newPerson(rand, x, z, yaw));
@@ -128,7 +127,7 @@ export function walkCrowd(people, dt, time, layout, player = null) {
 
     // The body turns toward where it is going, at a walking rate.
     const want = Math.atan2(p.dir.z, p.dir.x);
-    p.yaw += Math.max(-8 * dt, Math.min(8 * dt, foldAngle(want - p.yaw)));
+    p.yaw += Math.max(-8 * dt, Math.min(8 * dt, wrap(want - p.yaw)));
 
     const mag = Math.hypot(p.dir.x, p.dir.z) || 1;
     const nx = p.x + (p.dir.x / mag) * speed * dt;
