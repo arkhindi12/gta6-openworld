@@ -1,53 +1,109 @@
-// Keyboard and pointer input. Held keys give a steering direction; one-shot presses (start or
-// restart, pause) are queued as bit flags and taken once by the loop, so a press between two
-// frames is never lost and never counted twice.
+// Input: what is held, what was just pressed, and where the pointer is.
+//
+// Held keys are read every frame (walk, steer, hold the throttle). A press is queued and consumed
+// once, so a car door opens on the key-down and not on every frame the key stays down. The pointer
+// is kept in canvas pixels rather than CSS pixels, so the crosshair and the aim ray agree at any
+// window size and any page scaling.
 
-export const ACTION_CONFIRM = 1;
-export const ACTION_PAUSE = 2;
+const held = new Set();
+const pressed = new Set();
+const pointer = { x: 0, y: 0, down: false, inside: false };
 
-const LEFT = new Set(['ArrowLeft', 'KeyA']);
-const RIGHT = new Set(['ArrowRight', 'KeyD']);
-const CONFIRM = new Set(['Space', 'Enter']);
-const PAUSE = new Set(['KeyP', 'Escape']);
+// Keys the page would otherwise scroll or tab with.
+const SWALLOW = new Set(['w', 'a', 's', 'd', 'e', 'r', 'm', 'p', 'shift', ' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'tab']);
 
-export function createInput(target) {
-  let left = false;
-  let right = false;
-  let actions = 0;
+const normalise = (e) => (e.key === ' ' ? ' ' : e.key.toLowerCase());
 
-  window.addEventListener('keydown', (event) => {
-    if (LEFT.has(event.code)) left = true;
-    else if (RIGHT.has(event.code)) right = true;
-    else if (CONFIRM.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_CONFIRM;
-    } else if (PAUSE.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_PAUSE;
-    } else return;
-    event.preventDefault();
+/** Bind the keyboard and pointer to a canvas. Safe to call once per page. */
+export function attachInput(canvas) {
+  window.addEventListener('keydown', (e) => {
+    const k = normalise(e);
+    if (SWALLOW.has(k)) e.preventDefault();
+    if (!held.has(k)) pressed.add(k);
+    held.add(k);
   });
-  window.addEventListener('keyup', (event) => {
-    if (LEFT.has(event.code)) left = false;
-    else if (RIGHT.has(event.code)) right = false;
+  window.addEventListener('keyup', (e) => {
+    held.delete(normalise(e));
   });
-  // A key released while the tab is hidden never sends keyup: let go of everything on blur.
   window.addEventListener('blur', () => {
-    left = false;
-    right = false;
-  });
-  target.addEventListener('pointerdown', () => {
-    actions |= ACTION_CONFIRM;
+    held.clear();
+    pressed.clear();
+    pointer.down = false;
   });
 
-  return {
-    /** -1 for left, 1 for right, 0 for neither or both. */
-    direction() {
-      return (right ? 1 : 0) - (left ? 1 : 0);
-    },
-    /** The one-shot presses since the last call, as ACTION_* flags. */
-    takeActions() {
-      const taken = actions;
-      actions = 0;
-      return taken;
-    },
+  const place = (e) => {
+    const box = canvas.getBoundingClientRect();
+    const sx = canvas.width / Math.max(1, box.width);
+    const sy = canvas.height / Math.max(1, box.height);
+    pointer.x = Math.round((e.clientX - box.left) * sx);
+    pointer.y = Math.round((e.clientY - box.top) * sy);
+    pointer.inside = true;
   };
+  canvas.addEventListener('pointermove', place);
+  canvas.addEventListener('pointerdown', (e) => {
+    place(e);
+    if (e.button === 0) {
+      pointer.down = true;
+      pressed.add('fire');
+    }
+    if (e.button === 2) pressed.add('alt');
+  });
+  window.addEventListener('pointerup', (e) => {
+    if (e.button === 0) pointer.down = false;
+  });
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  canvas.addEventListener('pointerleave', () => {
+    pointer.inside = false;
+  });
+  // A tap on the canvas is the gesture that lets the audio context start.
+  canvas.addEventListener('pointerdown', () => onGesture?.());
+  window.addEventListener('keydown', () => onGesture?.());
+}
+
+let onGesture = null;
+/** Register the one-shot "the user interacted" callback, used to start audio. */
+export function onFirstGesture(fn) {
+  onGesture = fn;
+}
+
+/** True while any of these keys is down. */
+export function keyHeld(...keys) {
+  return keys.some((k) => held.has(k));
+}
+
+/** True once per key-down, and consumes the press. */
+export function keyPressed(...keys) {
+  let hit = false;
+  for (const k of keys) {
+    if (pressed.has(k)) {
+      pressed.delete(k);
+      hit = true;
+    }
+  }
+  return hit;
+}
+
+/** Drop the rest of this frame's presses. Called once per simulation step. */
+export function endFrame() {
+  pressed.clear();
+}
+
+/** The pointer, in canvas pixels. */
+export function pointerState() {
+  return pointer;
+}
+
+/**
+ * WASD as a screen-space vector: x right, z down, magnitude capped at one. The caller maps this
+ * through the camera onto the ground.
+ */
+export function moveAxes() {
+  let x = 0;
+  let z = 0;
+  if (keyHeld('w', 'arrowup')) z -= 1;
+  if (keyHeld('s', 'arrowdown')) z += 1;
+  if (keyHeld('a', 'arrowleft')) x -= 1;
+  if (keyHeld('d', 'arrowright')) x += 1;
+  const len = Math.hypot(x, z);
+  return len > 1 ? { x: x / len, z: z / len, mag: 1 } : { x, z, mag: len };
 }
