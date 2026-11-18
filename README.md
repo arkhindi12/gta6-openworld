@@ -40,10 +40,17 @@ always in frame. It pulls back and widens as the car picks up speed.
 ### The loop
 
 Five jobs, handed out in order. Each one is a marker in the world with a line in the HUD, a distance
-and a cash reward: reach a courier under the causeway, lift a specific drop-top off the Strip and
-deliver it to a lock-up, shake a three-star chase, drive a passenger who is being followed, and get
-to the marina jetty. Progress and cash are saved to `localStorage`, so a reload picks the chain up
-where it stopped.
+and a cash reward:
+
+1. **The Gutter Run** ($350) — reach the courier under the causeway onramp in Riviera Palms.
+2. **Pink Cadence** ($600) — steal the pink drop-top on the Strip and deliver it to the Neon Heights
+   lock-up.
+3. **Body Count** ($900) — clear the Coral Marina crew: drop three of them inside the marker.
+4. **The Long Shadow** ($1,400) — shake the VMPD, then reach the club on the Sunglass Strip.
+5. **Last Tide** ($2,600) — get to the Coral Marina jetty, take the boat and do not look back.
+
+Progress and cash are saved to `localStorage` under one key, so a reload picks the chain up where it
+stopped.
 
 Firing in the street raises the wanted level, one to five stars. Each star buys another cruiser;
 cruisers arrive from out of sight, stop close enough to let their two officers out, and those
